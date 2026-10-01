@@ -583,11 +583,9 @@ func (t *Transaction) ReversalDirection(ref *Transaction) (ledger.Direction, err
 //
 // Divergência é conflito, não reexecução: a operação já foi processada com
 // outro conteúdo e responder de novo alteraria o resultado.
+// seenPayloadHash vazio = sem registro anterior, passa.
 func (t *Transaction) CheckIdempotencyReplay(seenPayloadHash string) error {
-	if seenPayloadHash == "" {
-		return nil
-	}
-	if seenPayloadHash != t.payloadHash {
+	if seenPayloadHash != "" && seenPayloadHash != t.payloadHash {
 		return fmt.Errorf("%w: chave %s com hashes %s e %s",
 			ErrIdempotencyConflict, t.idempotency, seenPayloadHash, t.payloadHash)
 	}
