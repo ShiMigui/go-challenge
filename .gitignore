@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Binarios gerados por `go build` e por `make build`
+/api
+/app.bin
+
 # Test binary, built with `go test -c`
 *.test
 

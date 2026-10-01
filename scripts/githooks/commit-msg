@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# commit-msg: valida a mensagem do commit contra Conventional Commits.
+#
+# Formato aceito:  <tipo>(<escopo>)!: <descricao>
+#
+# Erros sao apresentados com o motivo e um exemplo, para nao custar tempo
+# ao desenvolvedor que ainda esta aprendendo o padrao.
+
+set -euo pipefail
+
+message_file="${1:-}"
+if [ -z "$message_file" ] || [ ! -f "$message_file" ]; then
+	echo "commit-msg: arquivo de mensagem invalido: '${message_file}'" >&2
+	exit 1
+fi
+
+# Primeira linha e titulo; resto do arquivo e o corpo, nao avaliado aqui.
+header="$(head -n 1 "$message_file" | tr -d '\r')"
+
+fail() {
+	echo "" >&2
+	echo "commit-msg: $1" >&2
+	echo "" >&2
+	echo "Esperado (Conventional Commits):" >&2
+	echo "  <tipo>(<escopo>): <descricao>" >&2
+	echo "" >&2
+	echo "Tipos permitidos:" >&2
+	echo "  feat     nova funcionalidade" >&2
+	echo "  fix      correcao de bug" >&2
+	echo "  docs     documentacao" >&2
+	echo "  style    formatacao (sem mudanca de comportamento)" >&2
+	echo "  refactor refatoracao (sem mudanca de comportamento)" >&2
+	echo "  perf     melhora de desempenho" >&2
+	echo "  test     testes" >&2
+	echo "  build    build ou dependencias" >&2
+	echo "  ci       pipeline e automacao" >&2
+	echo "  chore    manutencao" >&2
+	echo "  revert   reverte commit anterior" >&2
+	echo "" >&2
+	echo "Exemplos validos:" >&2
+	echo "  feat(wallet): adiciona abertura de carteira com idempotencia" >&2
+	echo "  fix!: corrige persistencia de dinheiro" >&2
+	echo "" >&2
+	echo "Reescreva a mensagem neste formato antes de commitar." >&2
+	exit 1
+}
+
+# Commits gerados por ferramentas e pelo git dispensam a formatacao.
+case "$header" in
+Merge\ * | Revert\ * | fixup\ !* | squash\ !* | amend\ !*)
+	exit 0
+	;;
+esac
+
+if [ -z "${header// /}" ]; then
+	fail "mensagem vazia"
+fi
+
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+
+pattern="^(${types})(\([a-z0-9._/-]+\))?!?: .+"
+if ! printf '%s' "$header" | grep -Eq "$pattern"; then
+	fail "formato invalido: '${header}'"
+fi
+
+# A descricao nao deve terminar com ponto final.
+if printf '%s' "$header" | grep -Eq ': .*\.$'; then
+	fail "descricao nao deve terminar com ponto final"
+fi
+
+# Titulo curto: primeira linha com no maximo 72 caracteres, incluindo quebra.
+if [ "${#header}" -gt 72 ]; then
+	echo "commit-msg: titulo excede 72 caracteres (tem ${#header})." >&2
+	echo "              mova o complemento para o corpo da mensagem." >&2
+	exit 1
+fi
+
+exit 0
