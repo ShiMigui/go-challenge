@@ -105,8 +105,12 @@ run "BET sem identidade externa barrado"    fail "INSERT INTO wager_transactions
 
 echo "== referencia =="
 run "REFUND sem referencia barrado"       fail "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount) VALUES ('pa','r1','pa:r1','h','$P','$W','r','g','REFUND','BRL',2500)"
+run "ROLLBACK sem referencia barrado"     fail "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount) VALUES ('pa','k1','pa:k1','h','$P','$W','r','g','ROLLBACK','BRL',2500)"
 run "BET com referencia barrado"          fail "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount,reference_external_transaction_id) VALUES ('pa','b5','pa:b5','h','$P','$W','r','g','BET','BRL',100,'tx-seed')"
+run "LOSS com referencia barrado"         fail "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount,reference_external_transaction_id) VALUES ('pa','l3','pa:l3','h','$P','$W','r','g','LOSS','BRL',0,'tx-seed')"
 run "REFUND com referencia aceito"        pass "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount,reference_external_transaction_id) VALUES ('pa','r2','pa:r2','h','$P','$W','r','g','REFUND','BRL',2500,'tx-seed')"
+run "WIN com referencia da rodada aceito" pass "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount,reference_external_transaction_id) VALUES ('pa','w2','pa:w2','h','$P','$W','round-1','g1','WIN','BRL',5000,'tx-seed')"
+run "WIN sem referencia tambem aceito"    pass "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount) VALUES ('pa','w3','pa:w3','h','$P','$W','round-1','g1','WIN','BRL',5000)"
 
 echo "== maquina de estados =="
 run "REJECTED sem processed_at barrado"   fail "INSERT INTO wager_transactions (provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,kind,currency,amount,state) VALUES ('pa','s1','pa:s1','h','$P','$W','BET','BRL',100,'REJECTED')"

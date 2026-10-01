@@ -111,10 +111,13 @@ de deduplicação de um provider.
 | `reference_external_transaction_id` | Id externo da operação referenciada |
 | `reference_transaction_id` | FK auto-referente → `wager_transactions(id)` |
 
-Os dois existem porque a referência pode chegar **antes** da operação
-original. O `kind` diz se a linha é reversão; `reference_external_transaction_id`
-precisa existir exatamente quando é reversão (bicondicional). A FK interna fica
-`NULL` enquanto a referência não é resolvida.
+Os dois existem porque a referência pode chegar **antes** da operação original.
+A FK interna fica `NULL` enquanto a referência não é resolvida.
+
+`reference_external_transaction_id` é **obrigatória** em `REFUND` e `ROLLBACK`,
+**opcional** em `WIN` e **proibida** em `BET`, `LOSS` e `OPENING`. Uma `WIN`
+pode citar a aposta da mesma rodada, mas não precisa — nem toda rodada chega
+com a aposta visível para quem processa o prêmio.
 
 ### Estado
 
@@ -303,7 +306,7 @@ marcado como publicado antes de o fato ter ocorrido.
 | Colunas em `wager_transactions` | 22 |
 | Checks em `wager_transactions` | 11, dos quais 4 inline na coluna |
 | Triggers | 4 (1 de version, 3 de append-only) |
-| Casos em `make db-test` | 68 |
+| Casos em `make db-test` | 72 |
 
 ---
 

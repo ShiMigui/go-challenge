@@ -77,10 +77,14 @@ CREATE TABLE wager_transactions (
             AND payload_hash IS NOT NULL)
     ),
 
-    -- Referencia externa existe exatamente para REFUND e ROLLBACK.
-    CONSTRAINT wager_tx_reference_iff_reversal CHECK (
-        (kind IN ('REFUND', 'ROLLBACK'))
-        = (reference_external_transaction_id IS NOT NULL)
+    -- Referencia externa: obrigatoria em REFUND/ROLLBACK, opcional em WIN,
+    -- proibida em BET, LOSS e OPENING.
+    CONSTRAINT wager_tx_reference_per_kind CHECK (
+        (kind IN ('REFUND', 'ROLLBACK')
+            AND reference_external_transaction_id IS NOT NULL)
+        OR kind = 'WIN'
+        OR (kind NOT IN ('REFUND', 'ROLLBACK', 'WIN')
+            AND reference_external_transaction_id IS NULL)
     ),
 
     -- PENDING_REFERENCE espera a referencia interna.
