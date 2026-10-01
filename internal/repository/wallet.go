@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
-	"github.com/shimigui/go-challenge/internal/wallet"
+	"github.com/shimigui/go-challenge/internal/domain/money"
+	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
 
 // walletColumns é a lista de campos usada em leitura, para que scan e
@@ -141,5 +141,9 @@ func (r *PostgresWallet) scanOne(ctx context.Context, q string, args ...any) (*w
 		}
 		return nil, err
 	}
-	return wallet.Rehydrate(id, playerID, money.Currency(currency), balance, version, createdAt, updatedAt), nil
+	mny, err := money.New(balance, money.Currency(currency))
+	if err != nil {
+		return nil, fmt.Errorf("wallet %s: moeda invalida %q: %w", id, currency, err)
+	}
+	return wallet.Rehydrate(id, playerID, mny, version, createdAt, updatedAt), nil
 }

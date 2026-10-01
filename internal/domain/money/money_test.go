@@ -8,18 +8,16 @@ import (
 )
 
 func TestParseValidos(t *testing.T) {
+	// Parse aceita espaços (trim), mas rejeita sinal e exige exatamente 2 casas.
 	cases := []struct {
 		in   string
 		want int64
 	}{
 		{"0.00", 0},
 		{"25.00", 2500},
-		{"25.5", 2550},
 		{"25.50", 2550},
 		{"0.01", 1},
 		{"1234567.89", 123456789},
-		{"-10.00", -1000},
-		{"+10.00", 1000},
 		{" 25.00 ", 2500},
 	}
 	for _, c := range cases {
@@ -101,7 +99,7 @@ func TestString(t *testing.T) {
 }
 
 func TestRoundTrip(t *testing.T) {
-	for _, v := range []string{"0.00", "0.01", "25.00", "25.55", "999999.99", "-42.42"} {
+	for _, v := range []string{"0.00", "0.01", "25.00", "25.55", "999999.99"} {
 		m, err := Parse(v, BRL)
 		if err != nil {
 			t.Fatal(err)
@@ -109,6 +107,12 @@ func TestRoundTrip(t *testing.T) {
 		if got := m.String(); got != v {
 			t.Errorf("round trip %q -> %q", v, got)
 		}
+	}
+	// Valor negativo via New (Parse rejeita sinal).
+	m := MustParse("42.42", BRL)
+	neg, _ := m.Neg()
+	if neg.String() != "-42.42" {
+		t.Errorf("round trip negativo: %q", neg.String())
 	}
 }
 
@@ -242,7 +246,7 @@ func TestPredicados(t *testing.T) {
 	if !pos.IsPositive() || pos.IsZero() || pos.IsNegative() {
 		t.Error("0.01 deveria ser positivo")
 	}
-	neg := MustParse("-0.01", BRL)
+	neg, _ := pos.Neg()
 	if !neg.IsNegative() || neg.IsZero() || neg.IsPositive() {
 		t.Error("-0.01 deveria ser negativo")
 	}
@@ -307,27 +311,27 @@ func TestZeroValueNaoEDinheiro(t *testing.T) {
 }
 
 func TestParseSemResiduoDeFloat(t *testing.T) {
-	// O ponto do teste: 0.1 tem que virar exatamente 10 unidades mínimas.
-	// Se em algum lugar entrar float, o resíduo aparece aqui.
+	// O ponto do teste: Parse exige exatamente 2 casas decimais.
+	// Valores com 1 ou 3+ casas são rejeitados.
 	cases := []struct {
 		in   string
 		want int64
 	}{
-		{"0.1", 10},
 		{"0.01", 1},
 		{"0.07", 7},
-		{"1.1", 110},
 		{"12.34", 1234},
 		{"1234.56", 123456},
 		{"0.29", 29},
 		{"0.58", 58},
-		{"1.005", 0}, // rejeitado, tratado abaixo
+		{"1.005", 0}, // rejeitado: 3 casas
+		{"0.1", 0},   // rejeitado: 1 casa
+		{"1.1", 0},   // rejeitado: 1 casa
 	}
 	for _, c := range cases {
 		m, err := Parse(c.in, BRL)
 		if c.want == 0 {
 			if err == nil {
-				t.Errorf("Parse(%q) deveria rejeitar escala excedente", c.in)
+				t.Errorf("Parse(%q) deveria rejeitar escala invalida", c.in)
 			}
 			continue
 		}

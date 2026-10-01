@@ -2,15 +2,15 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/ledger"
-	"github.com/shimigui/go-challenge/internal/money"
-	"github.com/shimigui/go-challenge/internal/wallet"
+	"github.com/shimigui/go-challenge/internal/domain/ledger"
+	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
 
 var colunasLedger = []string{
@@ -172,7 +172,7 @@ func TestWalletInsertRecusaIDInvalido(t *testing.T) {
 	repo := NewWalletRepository(db)
 
 	w, _ := wallet.New(wallet.Params{
-		ID: "invalido", PlayerID: playerID, Currency: money.BRL,
+		ID: "invalido", PlayerID: playerID,
 		Opening: brl("0.00"), Now: t0,
 	})
 	if err := repo.Insert(context.Background(), w); !errors.Is(err, ErrInvalidID) {
@@ -279,6 +279,10 @@ func TestNewEventRecusaIDInvalido(t *testing.T) {
 	}
 }
 
+func nullTime() sql.NullTime { return sql.NullTime{} }
+
+func timeValido() sql.NullTime { return sql.NullTime{Time: t0, Valid: true} }
+
 func TestTimePtr(t *testing.T) {
 	// Helper de scan: NULL tem de virar nil, senão o ponteiro nil
 	// viraria um time.Time zero e a transação pareceria concluída.
@@ -287,6 +291,10 @@ func TestTimePtr(t *testing.T) {
 	}
 	if timePtr(timeValido()) == nil {
 		t.Error("valor presente deveria virar ponteiro")
+	}
+	// O valor precisa ser o que veio do banco, não um zero silencioso.
+	if got := timePtr(timeValido()); got != nil && got.IsZero() {
+		t.Error("valor presente não pode virar instante zero")
 	}
 }
 

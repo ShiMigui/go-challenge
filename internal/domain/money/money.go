@@ -8,16 +8,8 @@ package money
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
-)
-
-// Currency é um código ISO 4217 de três letras.
-type Currency string
-
-const (
-	BRL Currency = "BRL"
-	USD Currency = "USD"
-	EUR Currency = "EUR"
 )
 
 var (
@@ -29,6 +21,9 @@ var (
 	ErrInvalidAmount = errors.New("valor monetario invalido")
 	// ErrInvalidCurrency é devolvido para códigos que não são ISO 4217.
 	ErrInvalidCurrency = errors.New("codigo de moeda invalido")
+	// ErrInvalidFormat é devolvido quando o formato da string não obedece
+	// ao contrato externo (§6.1): "25.00", duas casas, sem sinal, sem notação científica.
+	ErrInvalidFormat = errors.New("formato monetario invalido")
 )
 
 // scale é o número de casas decimais com que a moeda é operada.
@@ -44,7 +39,7 @@ type Money struct {
 
 // New cria um Money a partir das unidades mínimas.
 func New(amount int64, currency Currency) (Money, error) {
-	if err := validCurrency(currency); err != nil {
+	if err := Valid(currency); err != nil {
 		return Money{}, err
 	}
 	return Money{amount: amount, currency: currency}, nil
@@ -56,9 +51,18 @@ func Zero(currency Currency) Money {
 	return m
 }
 
+// MustNew é New para valores conhecidos em tempo de compilação.
+func MustNew(amount int64, currency Currency) Money {
+	m, err := New(amount, currency)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
 // FromMajor cria um Money a partir de unidades inteiras e centavos.
 func FromMajor(major, minor int64, currency Currency) (Money, error) {
-	if err := validCurrency(currency); err != nil {
+	if err := Valid(currency); err != nil {
 		return Money{}, err
 	}
 	if minor < 0 || minor >= 100 {
@@ -67,60 +71,43 @@ func FromMajor(major, minor int64, currency Currency) (Money, error) {
 	return Money{amount: major*100 + minor, currency: currency}, nil
 }
 
-// Parse converte "25.00" em Money. Rejeita vazio, NaN, Infinity, notação
-// científica, mais de duas casas e valores negativos.
+// Parse converte "25.00" em Money. Aplica as regras do §6.1: formato fixo
+// com duas casas, sem sinal, sem notação científica. Valores negativos são
+// rejeitados — para valores negativos internos use New() ou Neg().
+// Erros de formato envolvem ErrInvalidFormat (use errors.Is).
 func Parse(value string, currency Currency) (Money, error) {
-	if err := validCurrency(currency); err != nil {
+	if err := Valid(currency); err != nil {
 		return Money{}, err
 	}
+
 	raw := strings.TrimSpace(value)
-	if raw == "" {
-		return Money{}, fmt.Errorf("%w: vazio", ErrInvalidAmount)
+
+	if raw == "" || strings.ContainsAny(raw, "+-") {
+		return Money{}, fmt.Errorf("%w: formato invalido", ErrInvalidFormat)
 	}
-	if strings.ContainsAny(raw, "eE") {
-		return Money{}, fmt.Errorf("%w: notacao cientifica: %q", ErrInvalidAmount, value)
-	}
-	// '+' e '-' só são rejeitados aqui pela forma; o sinal é tratado abaixo.
-	neg := strings.HasPrefix(raw, "-")
-	if neg || strings.HasPrefix(raw, "+") {
-		raw = raw[1:]
-	}
-	if strings.Contains(raw, ",") {
-		return Money{}, fmt.Errorf("%w: virgula nao suportada: %q", ErrInvalidAmount, value)
-	}
+
 	parts := strings.Split(raw, ".")
-	if len(parts) > 2 {
-		return Money{}, fmt.Errorf("%w: mais de um separador decimal: %q", ErrInvalidAmount, value)
+	if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 2 {
+		return Money{}, fmt.Errorf("%w: esperado 'N.NN'", ErrInvalidFormat)
 	}
-	if parts[0] == "" {
-		return Money{}, fmt.Errorf("%w: sem parte inteira: %q", ErrInvalidAmount, value)
-	}
-	major, ok := parseDigits(parts[0])
-	if !ok {
-		return Money{}, fmt.Errorf("%w: parte inteira nao numerica: %q", ErrInvalidAmount, value)
-	}
-	var minor int64
-	if len(parts) == 2 {
-		if len(parts[1]) == 0 || len(parts[1]) > scale {
-			return Money{}, fmt.Errorf("%w: escala invalida: %q", ErrInvalidAmount, value)
-		}
-		minor, ok = parseDigits(parts[1])
-		if !ok {
-			return Money{}, fmt.Errorf("%w: centavos nao numericos: %q", ErrInvalidAmount, value)
-		}
-		// "25.5" significa 25 reais e 50 centavos.
-		for i := int64(len(parts[1])); i < scale; i++ {
-			minor *= 10
+
+	digits := parts[0] + parts[1]
+
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return Money{}, fmt.Errorf("%w: apenas digitos sao permitidos", ErrInvalidFormat)
 		}
 	}
-	if !multiplyFits(major, 100) {
-		return Money{}, fmt.Errorf("%w: overflow em %q", ErrInvalidAmount, value)
+
+	amount, err := strconv.ParseUint(digits, 10, 63)
+	if err != nil {
+		return Money{}, fmt.Errorf("%w: overflow", ErrInvalidAmount)
 	}
-	amount := major*100 + minor
-	if neg {
-		amount = -amount
-	}
-	return Money{amount: amount, currency: currency}, nil
+
+	return Money{
+		amount:   int64(amount),
+		currency: currency,
+	}, nil
 }
 
 // MustParse é Parse para valores conhecidos em tempo de compilação.
@@ -265,38 +252,3 @@ const (
 	minInt64 = -1 << 63
 	maxInt64 = 1<<63 - 1
 )
-
-// validCurrency exige três letras maiúsculas ASCII.
-func validCurrency(c Currency) error {
-	if len(c) != 3 {
-		return fmt.Errorf("%w: %q", ErrInvalidCurrency, string(c))
-	}
-	for i := 0; i < 3; i++ {
-		if c[i] < 'A' || c[i] > 'Z' {
-			return fmt.Errorf("%w: %q", ErrInvalidCurrency, string(c))
-		}
-	}
-	return nil
-}
-
-func parseDigits(s string) (int64, bool) {
-	if s == "" {
-		return 0, false
-	}
-	var out int64
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return 0, false
-		}
-		d := int64(s[i] - '0')
-		if !multiplyFits(out, 10) || out*10 > (1<<63-1)-d {
-			return 0, false
-		}
-		out = out*10 + d
-	}
-	return out, true
-}
-
-func multiplyFits(v, factor int64) bool {
-	return v <= (1<<63-1)/factor
-}

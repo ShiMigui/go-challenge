@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/ledger"
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/ledger"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 var agora = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -15,7 +15,7 @@ func abertura(t *testing.T) *Transaction {
 	t.Helper()
 	tx, err := NewOpening(OpeningParams{
 		ID: "tx-open", PlayerID: "p1", WalletID: "w1",
-		Currency: money.BRL, Amount: money.MustParse("100.00", money.BRL), Now: agora,
+		Amount: money.MustParse("100.00", money.BRL), Now: agora,
 	})
 	if err != nil {
 		t.Fatalf("NewOpening: %v", err)
@@ -45,9 +45,6 @@ func externa(t *testing.T, p ExternalParams) *Transaction {
 	}
 	if p.WalletID == "" {
 		p.WalletID = "w1"
-	}
-	if p.Currency == "" {
-		p.Currency = money.BRL
 	}
 	if p.Kind == "" {
 		p.Kind = KindBet
@@ -93,8 +90,11 @@ func externoErr(t *testing.T, p ExternalParams) error {
 	if p.WalletID == "" {
 		p.WalletID = "w1"
 	}
-	if p.Currency == "" {
-		p.Currency = money.BRL
+	if p.Kind == "" {
+		p.Kind = KindBet
+	}
+	if p.Amount.Currency() == "" {
+		p.Amount = money.MustParse("10.00", money.BRL)
 	}
 	if p.Now.IsZero() {
 		p.Now = agora
@@ -134,7 +134,7 @@ func TestAberturaNaoVeioDeFora(t *testing.T) {
 	_, err := NewExternal(ExternalParams{
 		ID: "tx1", ProviderID: "prov", ExternalID: "ext",
 		IdempotencyKey: "k", PayloadHash: "h",
-		PlayerID: "p", WalletID: "w", Currency: money.BRL,
+		PlayerID: "p", WalletID: "w",
 		Kind: KindOpening, Amount: money.MustParse("10.00", money.BRL), Now: agora,
 	})
 	if !errors.Is(err, ErrExternalNotAllowed) {
@@ -147,7 +147,7 @@ func TestValidacoesOperacaoExterna(t *testing.T) {
 		return ExternalParams{
 			ID: "tx1", ProviderID: "prov", ExternalID: "ext",
 			IdempotencyKey: "k", PayloadHash: "h",
-			PlayerID: "p", WalletID: "w", Currency: money.BRL,
+			PlayerID: "p", WalletID: "w",
 			Kind: KindBet, Amount: money.MustParse("10.00", money.BRL), Now: agora,
 		}
 	}
@@ -164,13 +164,9 @@ func TestValidacoesOperacaoExterna(t *testing.T) {
 		{"sem hash", func(p *ExternalParams) { p.PayloadHash = "" }, ErrInvalidPayloadHash},
 		{"sem player", func(p *ExternalParams) { p.PlayerID = "" }, ErrInvalidPlayerID},
 		{"sem wallet", func(p *ExternalParams) { p.WalletID = "" }, ErrInvalidWalletID},
-		{"moeda do valor difere", func(p *ExternalParams) {
-			p.Currency = money.BRL
-			p.Amount = money.MustParse("10.00", money.USD)
-		}, money.ErrCurrencyMismatch},
 		{"BET com valor zero", func(p *ExternalParams) { p.Amount = money.Zero(money.BRL) }, ErrInvalidAmountForKind},
 		{"BET com valor negativo", func(p *ExternalParams) {
-			p.Amount = money.MustParse("-10.00", money.BRL)
+			p.Amount = money.MustNew(-1000, money.BRL)
 		}, ErrInvalidAmountForKind},
 		{"LOSS com valor", func(p *ExternalParams) {
 			p.Kind = KindLoss
@@ -418,7 +414,7 @@ func TestValidacaoDaReferencia(t *testing.T) {
 			Amount: money.MustParse("10.00", money.BRL), Now: agora,
 		}), ErrPlayerMismatch},
 		{"moeda diferente", externa(t, ExternalParams{
-			Kind: KindBet, ExternalID: "ext-bet", Currency: money.USD,
+			Kind: KindBet, ExternalID: "ext-bet",
 			Amount: money.MustParse("10.00", money.USD), Now: agora,
 		}), ErrCurrencyMismatchOnReference},
 	}
@@ -599,7 +595,7 @@ func TestIdempotencia(t *testing.T) {
 func TestRehydrateNaoRevalida(t *testing.T) {
 	tx := Rehydrate(
 		"tx-9", KindRefund, StateProcessed,
-		"p9", "w9", money.BRL, money.MustParse("10.00", money.BRL),
+		"p9", "w9", money.MustParse("10.00", money.BRL),
 		"round-9", "game-9", "prov-9", "ext-9", "prov-9:ext-9", "hash-9",
 		"ext-0", "tx-0", "", "",
 		3, agora,

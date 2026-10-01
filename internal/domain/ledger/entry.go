@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 var (

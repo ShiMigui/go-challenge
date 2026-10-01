@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/ledger"
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/ledger"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 const ledgerColumns = `id, wallet_id, transaction_id, direction, amount,

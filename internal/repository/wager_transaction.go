@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
-	"github.com/shimigui/go-challenge/internal/wager"
+	"github.com/shimigui/go-challenge/internal/domain/money"
+	"github.com/shimigui/go-challenge/internal/domain/wager"
 )
 
 // ErrDuplicate é devolvido quando a identidade única já existe.
@@ -340,7 +340,7 @@ func scanWager(s scanner) (*wager.Transaction, error) {
 	}
 	return wager.Rehydrate(
 		id, wager.Kind(kind), wager.State(state),
-		playerID, walletID, money.Currency(currency), valor,
+		playerID, walletID, valor,
 		stringFromNull(roundID), stringFromNull(gameID),
 		stringFromNull(providerID), stringFromNull(externalID),
 		stringFromNull(idempotency), stringFromNull(payloadHash),
@@ -357,7 +357,3 @@ func timeOrZero(nt sql.NullTime) time.Time {
 	}
 	return nt.Time
 }
-
-func nullTime() sql.NullTime { return sql.NullTime{} }
-
-func timeValido() sql.NullTime { return sql.NullTime{Time: t0, Valid: true} }

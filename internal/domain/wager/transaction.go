@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/ledger"
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/ledger"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 // Kind é o tipo da operação de wagering.
@@ -151,8 +151,7 @@ type Transaction struct {
 	state       State
 	playerID    string
 	walletID    string
-	currency    money.Currency
-	amount      money.Money
+	amount      money.Money // contém a moeda
 	roundID     string
 	gameID      string
 	providerID  string
@@ -176,11 +175,11 @@ type Transaction struct {
 }
 
 // OpeningParams são os dados de uma abertura interna de carteira.
+// A moeda vem do Amount.Currency().
 type OpeningParams struct {
 	ID       string
 	PlayerID string
 	WalletID string
-	Currency money.Currency
 	Amount   money.Money
 	Now      time.Time
 }
@@ -199,10 +198,6 @@ func NewOpening(p OpeningParams) (*Transaction, error) {
 	if p.WalletID == "" {
 		return nil, ErrInvalidWalletID
 	}
-	if p.Amount.Currency() != p.Currency {
-		return nil, fmt.Errorf("%w: valor em %s, transação em %s",
-			money.ErrCurrencyMismatch, p.Amount.Currency(), p.Currency)
-	}
 	if p.Amount.IsNegative() {
 		return nil, fmt.Errorf("%w: abertura %s", money.ErrNegativeAmount, p.Amount)
 	}
@@ -213,7 +208,6 @@ func NewOpening(p OpeningParams) (*Transaction, error) {
 		state:     StatePending,
 		playerID:  p.PlayerID,
 		walletID:  p.WalletID,
-		currency:  p.Currency,
 		amount:    p.Amount,
 		createdAt: p.Now,
 		updatedAt: p.Now,
@@ -229,9 +223,8 @@ type ExternalParams struct {
 	PayloadHash    string
 	PlayerID       string
 	WalletID       string
-	Currency       money.Currency
 	Kind           Kind
-	Amount         money.Money
+	Amount         money.Money // contém a moeda
 	RoundID        string
 	GameID         string
 	ReferenceExtID string
@@ -269,10 +262,7 @@ func NewExternal(p ExternalParams) (*Transaction, error) {
 	if p.WalletID == "" {
 		return nil, ErrInvalidWalletID
 	}
-	if p.Amount.Currency() != p.Currency {
-		return nil, fmt.Errorf("%w: valor em %s, transação em %s",
-			money.ErrCurrencyMismatch, p.Amount.Currency(), p.Currency)
-	}
+	// A moeda da transação vem do Amount
 	if err := validateAmountForKind(p.Kind, p.Amount); err != nil {
 		return nil, err
 	}
@@ -285,7 +275,6 @@ func NewExternal(p ExternalParams) (*Transaction, error) {
 		state:               StatePending,
 		playerID:            p.PlayerID,
 		walletID:            p.WalletID,
-		currency:            p.Currency,
 		amount:              p.Amount,
 		roundID:             p.RoundID,
 		gameID:              p.GameID,
@@ -342,8 +331,8 @@ func (t *Transaction) PlayerID() string { return t.playerID }
 // WalletID devolve a carteira afetada.
 func (t *Transaction) WalletID() string { return t.walletID }
 
-// Currency devolve a moeda.
-func (t *Transaction) Currency() money.Currency { return t.currency }
+// Currency devolve a moeda da operação (do amount).
+func (t *Transaction) Currency() money.Currency { return t.amount.Currency() }
 
 // Amount devolve o valor da operação.
 func (t *Transaction) Amount() money.Money { return t.amount }
@@ -412,21 +401,12 @@ func (t *Transaction) IsPending() bool {
 // Só é válida a partir de PENDING ou PENDING_REFERENCE: é a transição que
 // a referencia pendente precisa fazer quando finalmente chega.
 func (t *Transaction) MarkProcessed(now time.Time) error {
-	if t.state.IsTerminal() {
-		return fmt.Errorf("%w: %s -> %s", ErrTerminalTransition, t.state, StateProcessed)
-	}
-	t.state = StateProcessed
-	t.failureCode = ""
-	t.failureMessage = ""
-	t.processedAt = now
-	t.hasProcessed = true
-	t.updatedAt = now
-	return nil
+	return t.transitionToTerminal(StateProcessed, "", "", now)
 }
 
 // MarkRejected recusa a operação por regra de negócio.
 func (t *Transaction) MarkRejected(code, message string, now time.Time) error {
-	return t.finalize(StateRejected, code, message, now)
+	return t.transitionToTerminal(StateRejected, code, message, now)
 }
 
 // MarkFailed registra falha permanente de infraestrutura.
@@ -434,20 +414,27 @@ func (t *Transaction) MarkRejected(code, message string, now time.Time) error {
 // A distinção importa para o consumidor: FAILED é auditoria de um problema
 // nosso, REJECTED é resposta correta a uma entrada que não devia passar.
 func (t *Transaction) MarkFailed(code, message string, now time.Time) error {
-	return t.finalize(StateFailed, code, message, now)
+	return t.transitionToTerminal(StateFailed, code, message, now)
 }
 
-// finalize aplica uma transição terminal.
-func (t *Transaction) finalize(state State, code, message string, now time.Time) error {
+// transitionToTerminal aplica uma transição para estado terminal.
+//
+// PROCESSED não exige código/mensagem; REJECTED e FAILED exigem.
+func (t *Transaction) transitionToTerminal(state State, code, message string, now time.Time) error {
 	if t.state.IsTerminal() {
 		return fmt.Errorf("%w: %s -> %s", ErrTerminalTransition, t.state, state)
 	}
-	if code == "" {
+	if state != StateProcessed && code == "" {
 		return ErrFailureCodeRequired
 	}
 	t.state = state
-	t.failureCode = code
-	t.failureMessage = message
+	if state == StateProcessed {
+		t.failureCode = ""
+		t.failureMessage = ""
+	} else {
+		t.failureCode = code
+		t.failureMessage = message
+	}
 	t.processedAt = now
 	t.hasProcessed = true
 	t.updatedAt = now
@@ -532,8 +519,8 @@ func (t *Transaction) ValidateReference(ref *Transaction) error {
 	if ref.playerID != t.playerID {
 		return fmt.Errorf("%w: %s vs %s", ErrPlayerMismatch, ref.playerID, t.playerID)
 	}
-	if ref.currency != t.currency {
-		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatchOnReference, ref.currency, t.currency)
+	if ref.Currency() != t.Currency() {
+		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatchOnReference, ref.Currency(), t.Currency())
 	}
 	// Reversão é integral: o valor precisa ser o referenciado.
 	equal, err := t.amount.Cmp(ref.amount)
@@ -612,7 +599,7 @@ func (t *Transaction) CheckIdempotencyReplay(seenPayloadHash string) error {
 // Não revalida nem reexecuta transição: quem gravou já cumpriu as regras.
 func Rehydrate(
 	id string, kind Kind, state State,
-	playerID, walletID string, currency money.Currency, amount money.Money,
+	playerID, walletID string, amount money.Money,
 	roundID, gameID, providerID, externalID, idempotency, payloadHash string,
 	referenceExtID, referenceID, failureCode, failureMessage string,
 	referenceAttempts int, referenceNextAttempt time.Time,
@@ -621,7 +608,7 @@ func Rehydrate(
 	return &Transaction{
 		id: id, kind: kind, state: state,
 		playerID: playerID, walletID: walletID,
-		currency: currency, amount: amount,
+		amount:  amount,
 		roundID: roundID, gameID: gameID,
 		providerID: providerID, externalID: externalID,
 		idempotency: idempotency, payloadHash: payloadHash,

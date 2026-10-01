@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 var (
@@ -33,11 +33,11 @@ const initialVersion = 1
 //
 // O saldo e a versão só são alterados por Credit e Debit. A versão é
 // calculado aqui e confirmado no banco por update condicional.
+// A moeda é obtida via balance.Currency().
 type Wallet struct {
 	id        string
 	playerID  string
-	currency  money.Currency
-	balance   money.Money
+	balance   money.Money // contém a moeda
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
@@ -45,10 +45,10 @@ type Wallet struct {
 }
 
 // Params são os dados de criação de uma carteira.
+// A moeda vem do Opening.Currency().
 type Params struct {
 	ID       string
 	PlayerID string
-	Currency money.Currency
 	Opening  money.Money
 	Now      time.Time
 }
@@ -56,6 +56,7 @@ type Params struct {
 // New cria uma carteira com saldo inicial.
 //
 // O valor de abertura pode ser zero: a spec aceita zero no saldo inicial.
+// A moeda da carteira vem do Opening.Currency().
 func New(p Params) (*Wallet, error) {
 	if p.ID == "" {
 		return nil, ErrInvalidWalletID
@@ -63,17 +64,12 @@ func New(p Params) (*Wallet, error) {
 	if p.PlayerID == "" {
 		return nil, ErrInvalidPlayerID
 	}
-	if p.Opening.Currency() != p.Currency {
-		return nil, fmt.Errorf("%w: abertura em %s, carteira em %s",
-			ErrCurrencyMismatch, p.Opening.Currency(), p.Currency)
-	}
 	if p.Opening.IsNegative() {
 		return nil, fmt.Errorf("%w: abertura %s", money.ErrNegativeAmount, p.Opening)
 	}
 	return &Wallet{
 		id:        p.ID,
 		playerID:  p.PlayerID,
-		currency:  p.Currency,
 		balance:   p.Opening,
 		version:   initialVersion,
 		createdAt: p.Now,
@@ -87,16 +83,10 @@ func New(p Params) (*Wallet, error) {
 // Não valida nem recalcula nada: o banco já garantiu as invariantes na
 // escrita. Reidratação não pode reexecutar regra de negócio, senão um bug
 // de leitura passaria a rejeitar dados legítimos.
-func Rehydrate(id, playerID string, currency money.Currency, balanceAmount int64, version int64, createdAt, updatedAt time.Time) *Wallet {
-	balance, err := money.New(balanceAmount, currency)
-	if err != nil {
-		// A moeda veio do próprio banco e já passou pelo CHECK ISO 4217.
-		panic(fmt.Sprintf("rehydrate com moeda invalida %q: %v", currency, err))
-	}
+func Rehydrate(id, playerID string, balance money.Money, version int64, createdAt, updatedAt time.Time) *Wallet {
 	return &Wallet{
 		id:        id,
 		playerID:  playerID,
-		currency:  currency,
 		balance:   balance,
 		version:   version,
 		createdAt: createdAt,
@@ -111,8 +101,8 @@ func (w *Wallet) ID() string { return w.id }
 // PlayerID devolve o jogador dono da carteira.
 func (w *Wallet) PlayerID() string { return w.playerID }
 
-// Currency devolve a moeda da carteira.
-func (w *Wallet) Currency() money.Currency { return w.currency }
+// Currency devolve a moeda da carteira (do balance).
+func (w *Wallet) Currency() money.Currency { return w.balance.Currency() }
 
 // Balance devolve o saldo atual.
 func (w *Wallet) Balance() money.Money { return w.balance }
@@ -131,14 +121,8 @@ func (w *Wallet) UpdatedAt() time.Time { return w.updatedAt }
 // O valor precisa ser positivo: valor zero não é uma operação, e valor
 // negativo em crédito viraria um débito silencioso.
 func (w *Wallet) Credit(amount money.Money, now time.Time) error {
-	if !w.active {
-		return ErrClosedTransition
-	}
-	if amount.Currency() != w.currency {
-		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatch, amount.Currency(), w.currency)
-	}
-	if amount.IsNegative() {
-		return fmt.Errorf("%w: credito %s", money.ErrNegativeAmount, amount)
+	if err := w.validateMutation(amount, "credito"); err != nil {
+		return err
 	}
 	if amount.IsZero() {
 		return fmt.Errorf("%w: credito zero", money.ErrInvalidAmount)
@@ -147,9 +131,7 @@ func (w *Wallet) Credit(amount money.Money, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("credito: %w", err)
 	}
-	w.balance = total
-	w.version++
-	w.updatedAt = now
+	w.applyMutation(total, now)
 	return nil
 }
 
@@ -158,14 +140,8 @@ func (w *Wallet) Credit(amount money.Money, now time.Time) error {
 // O saldo nunca fica negativo: é aqui que a regra é decidida, antes de o
 // banco recusar o CHECK.
 func (w *Wallet) Debit(amount money.Money, now time.Time) error {
-	if !w.active {
-		return ErrClosedTransition
-	}
-	if amount.Currency() != w.currency {
-		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatch, amount.Currency(), w.currency)
-	}
-	if amount.IsNegative() {
-		return fmt.Errorf("%w: debito %s", money.ErrNegativeAmount, amount)
+	if err := w.validateMutation(amount, "debito"); err != nil {
+		return err
 	}
 	if amount.IsZero() {
 		return fmt.Errorf("%w: debito zero", money.ErrInvalidAmount)
@@ -181,16 +157,38 @@ func (w *Wallet) Debit(amount money.Money, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("debito: %w", err)
 	}
-	w.balance = total
-	w.version++
-	w.updatedAt = now
+	w.applyMutation(total, now)
 	return nil
 }
 
 // CanDebit informa se o débito seria possível, sem alterar a carteira.
 func (w *Wallet) CanDebit(amount money.Money) (bool, error) {
-	if amount.Currency() != w.currency {
-		return false, fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatch, amount.Currency(), w.currency)
+	if err := w.validateMutation(amount, "debito"); err != nil {
+		return false, err
+	}
+	if amount.IsZero() {
+		return false, fmt.Errorf("%w: debito zero", money.ErrInvalidAmount)
 	}
 	return w.balance.GreaterThanOrEqual(amount)
+}
+
+// validateMutation valida regras comuns a Credit e Debit.
+func (w *Wallet) validateMutation(amount money.Money, op string) error {
+	if !w.active {
+		return ErrClosedTransition
+	}
+	if amount.Currency() != w.balance.Currency() {
+		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatch, amount.Currency(), w.balance.Currency())
+	}
+	if amount.IsNegative() {
+		return fmt.Errorf("%w: %s %s", money.ErrNegativeAmount, op, amount)
+	}
+	return nil
+}
+
+// applyMutation aplica a mutação comum: atualiza saldo, versão e timestamp.
+func (w *Wallet) applyMutation(newBalance money.Money, now time.Time) {
+	w.balance = newBalance
+	w.version++
+	w.updatedAt = now
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 var agora = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -84,7 +84,7 @@ func TestDebitoEsgotandoSaldo(t *testing.T) {
 	_, err := ForDebit("e", "w", "t",
 		money.MustParse("100.01", money.BRL),
 		money.MustParse("100.00", money.BRL),
-		money.MustParse("-0.01", money.BRL), agora)
+		money.MustNew(-1, money.BRL), agora)
 	// A aritmética 100.00 - 100.01 = -0.01 é coerente, mas o saldo final
 	// negativo é proibido: a wallet teria recusado o débito antes.
 	if !errors.Is(err, money.ErrNegativeAmount) {
@@ -93,13 +93,16 @@ func TestDebitoEsgotandoSaldo(t *testing.T) {
 }
 
 func TestValorNaoPositivo(t *testing.T) {
-	for _, v := range []string{"0.00", "-1.00"} {
+	// Testa valor zero (via Parse) e negativo (via MustNew, pois Parse rejeita sinal).
+	zero := money.MustParse("0.00", money.BRL)
+	neg := money.MustNew(-100, money.BRL)
+	for _, m := range []money.Money{zero, neg} {
 		_, err := ForCredit("e", "w", "t",
-			money.MustParse(v, money.BRL),
+			m,
 			money.MustParse("100.00", money.BRL),
 			money.MustParse("100.00", money.BRL), agora)
 		if !errors.Is(err, ErrNonPositiveAmount) {
-			t.Errorf("valor %s: esperava ErrNonPositiveAmount, veio %v", v, err)
+			t.Errorf("valor %s: esperava ErrNonPositiveAmount, veio %v", m.String(), err)
 		}
 	}
 }
@@ -141,7 +144,7 @@ func TestValidacoes(t *testing.T) {
 	}
 
 	p = base()
-	p.BalanceBefore = money.MustParse("-1.00", money.BRL)
+	p.BalanceBefore = money.MustNew(-100, money.BRL)
 	p.BalanceAfter = money.MustParse("9.00", money.BRL)
 	if _, err := New(p); !errors.Is(err, money.ErrNegativeAmount) {
 		t.Errorf("saldo anterior negativo: esperava ErrNegativeAmount, veio %v", err)

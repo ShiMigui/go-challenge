@@ -50,6 +50,13 @@ Raiz do agregado financeiro. Uma linha por par `(player_id, currency)`.
 por moeda, não uma carteira só — por isso a unique é no par e não em
 `player_id`.
 
+**O CHECK é sintático, a lista oficial é semântica.** `^[A-Z]{3}$` aceita `QQQ`,
+`XBT` (retirado da ISO) e `XAU`, que é ouro. O domínio valida contra a lista
+oficial da ISO 4217 (`internal/domain/money`) e recusa o que não é moeda
+nacional circulante. Trocar o CHECK por um `ENUM` com os 178 códigos fecharia a
+porta também no banco, ao custo de uma migration e de um tipo que engessa a
+lista quando a ISO publica novidade.
+
 **`version` é controlada pelo banco.** O trigger `wallets_bump_version` roda
 `BEFORE UPDATE` e só age se `balance` mudou de valor, incrementando a versão e
 ajustando `updated_at`. O back escreve apenas `balance`; se mandar `version`, a

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 func novaCarteira(t *testing.T, abertura string) *Wallet {
@@ -14,7 +14,6 @@ func novaCarteira(t *testing.T, abertura string) *Wallet {
 	w, err := New(Params{
 		ID:       "wallet-1",
 		PlayerID: "player-1",
-		Currency: money.BRL,
 		Opening:  money.MustParse(abertura, money.BRL),
 		Now:      now,
 	})
@@ -40,7 +39,7 @@ func TestNewVersaoInicial(t *testing.T) {
 func TestNewAceitaSaldoZero(t *testing.T) {
 	// A spec aceita zero no saldo inicial.
 	if _, err := New(Params{
-		ID: "w", PlayerID: "p", Currency: money.BRL,
+		ID: "w", PlayerID: "p",
 		Opening: money.Zero(money.BRL), Now: time.Now(),
 	}); err != nil {
 		t.Errorf("abertura zero deveria ser aceita: %v", err)
@@ -54,10 +53,9 @@ func TestNewValidacoes(t *testing.T) {
 		p    Params
 		want error
 	}{
-		{"sem id", Params{PlayerID: "p", Currency: money.BRL, Opening: money.Zero(money.BRL), Now: now}, ErrInvalidWalletID},
-		{"sem player", Params{ID: "w", Currency: money.BRL, Opening: money.Zero(money.BRL), Now: now}, ErrInvalidPlayerID},
-		{"abertura negativa", Params{ID: "w", PlayerID: "p", Currency: money.BRL, Opening: money.MustParse("-1.00", money.BRL), Now: now}, money.ErrNegativeAmount},
-		{"moeda diferente", Params{ID: "w", PlayerID: "p", Currency: money.BRL, Opening: money.MustParse("1.00", money.USD), Now: now}, ErrCurrencyMismatch},
+		{"sem id", Params{PlayerID: "p", Opening: money.Zero(money.BRL), Now: now}, ErrInvalidWalletID},
+		{"sem player", Params{ID: "w", Opening: money.Zero(money.BRL), Now: now}, ErrInvalidPlayerID},
+		{"abertura negativa", Params{ID: "w", PlayerID: "p", Opening: money.MustNew(-100, money.BRL), Now: now}, money.ErrNegativeAmount},
 	}
 	for _, c := range cases {
 		_, err := New(c.p)
@@ -151,10 +149,10 @@ func TestOperacoesRejeitamValorInvalido(t *testing.T) {
 	if err := w.Debit(money.Zero(money.BRL), now); !errors.Is(err, money.ErrInvalidAmount) {
 		t.Errorf("débito zero: esperava ErrInvalidAmount, veio %v", err)
 	}
-	if err := w.Credit(money.MustParse("-5.00", money.BRL), now); !errors.Is(err, money.ErrNegativeAmount) {
+	if err := w.Credit(money.MustNew(-500, money.BRL), now); !errors.Is(err, money.ErrNegativeAmount) {
 		t.Errorf("crédito negativo: esperava ErrNegativeAmount, veio %v", err)
 	}
-	if err := w.Debit(money.MustParse("-5.00", money.BRL), now); !errors.Is(err, money.ErrNegativeAmount) {
+	if err := w.Debit(money.MustNew(-500, money.BRL), now); !errors.Is(err, money.ErrNegativeAmount) {
 		t.Errorf("débito negativo: esperava ErrNegativeAmount, veio %v", err)
 	}
 	if w.Version() != 1 {
@@ -223,7 +221,7 @@ func TestRehydrateNaoRevalida(t *testing.T) {
 	created := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 9, 15, 11, 30, 0, 0, time.UTC)
 
-	w := Rehydrate("wallet-9", "player-9", money.BRL, 5000, 7, created, updated)
+	w := Rehydrate("wallet-9", "player-9", money.MustParse("50.00", money.BRL), 7, created, updated)
 	if w.Version() != 7 {
 		t.Errorf("versão = %d, quer 7", w.Version())
 	}
@@ -236,7 +234,7 @@ func TestRehydrateNaoRevalida(t *testing.T) {
 }
 
 func TestRehydrateComSaldoZero(t *testing.T) {
-	w := Rehydrate("w", "p", money.USD, 0, 1, time.Now(), time.Now())
+	w := Rehydrate("w", "p", money.Zero(money.USD), 1, time.Now(), time.Now())
 	if !w.Balance().IsZero() {
 		t.Errorf("saldo = %s", w.Balance())
 	}

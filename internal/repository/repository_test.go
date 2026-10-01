@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/money"
-	"github.com/shimigui/go-challenge/internal/wager"
-	"github.com/shimigui/go-challenge/internal/wallet"
+	"github.com/shimigui/go-challenge/internal/domain/money"
+	"github.com/shimigui/go-challenge/internal/domain/wager"
+	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
 
 const (
@@ -31,7 +31,7 @@ func brl(valor string) money.Money { return money.MustParse(valor, money.BRL) }
 func novaCarteira(t *testing.T, id, player string, valor string) *wallet.Wallet {
 	t.Helper()
 	w, err := wallet.New(wallet.Params{
-		ID: id, PlayerID: player, Currency: money.BRL,
+		ID: id, PlayerID: player,
 		Opening: brl(valor), Now: t0,
 	})
 	if err != nil {
@@ -45,7 +45,7 @@ func novaAposta(t *testing.T, id, externalID, valor string) *wager.Transaction {
 	tx, err := wager.NewExternal(wager.ExternalParams{
 		ID: id, ProviderID: "prov-1", ExternalID: externalID,
 		IdempotencyKey: "prov-1:" + externalID, PayloadHash: "hash-1",
-		PlayerID: playerID, WalletID: walletID, Currency: money.BRL,
+		PlayerID: playerID, WalletID: walletID,
 		Kind: wager.KindBet, Amount: brl(valor), Now: t0,
 	})
 	if err != nil {
@@ -402,7 +402,7 @@ func TestWagerResolveReference(t *testing.T) {
 	tx, err := wager.NewExternal(wager.ExternalParams{
 		ID: txID, ProviderID: "prov-1", ExternalID: "ext-r",
 		IdempotencyKey: "k", PayloadHash: "h",
-		PlayerID: playerID, WalletID: walletID, Currency: money.BRL,
+		PlayerID: playerID, WalletID: walletID,
 		Kind: wager.KindRefund, Amount: brl("10.00"),
 		ReferenceExtID: "ext-bet", Now: t0,
 	})
@@ -458,7 +458,7 @@ func TestWagerInsertDuplicadoDeAbertura(t *testing.T) {
 
 	abertura, err := wager.NewOpening(wager.OpeningParams{
 		ID: txID, PlayerID: playerID, WalletID: walletID,
-		Currency: money.BRL, Amount: brl("50.00"), Now: t0,
+		Amount: brl("50.00"), Now: t0,
 	})
 	if err != nil {
 		t.Fatal(err)
