@@ -43,10 +43,6 @@ setup:
 	@echo "pre-commit: gofmt, go vet e go test"
 	@echo "commit-msg: conventional commits"
 	@echo "pre-push  : go vet e go test -race"
-	@echo
-	@echo "proximo passo: docker compose up --build"
-	@echo "para desinstalar: make hooks-uninstall"
-	@echo "os hooks sao obrigatorios: nao ha bypass"
 
 .PHONY: test
 test:
