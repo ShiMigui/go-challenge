@@ -1,4 +1,3 @@
-CREATE TYPE wager_origin AS ENUM ('INTERNAL', 'EXTERNAL');
 CREATE TYPE wager_kind AS ENUM ('OPENING', 'BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK');
 CREATE TYPE wager_state AS ENUM (
     'PENDING',
@@ -11,7 +10,9 @@ CREATE TYPE wager_state AS ENUM (
 CREATE TABLE wager_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    origin wager_origin NOT NULL,
+    -- kind e o unico discriminador: OPENING e a abertura interna de carteira,
+    -- todo o resto vem de fora (HTTP ou SQS). Nao ha coluna de origem porque
+    -- ela seria estado duplicado, sempre igual a (kind = 'OPENING').
     kind wager_kind NOT NULL,
 
     -- Somente para origem EXTERNAL. NULL impede que uma operacao interna
@@ -47,23 +48,16 @@ CREATE TABLE wager_transactions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now() CHECK (updated_at >= created_at),
     processed_at TIMESTAMPTZ,
-    resolved_at TIMESTAMPTZ,
 
     CONSTRAINT wager_tx_provider_external_uniq
         UNIQUE (provider_id, external_transaction_id),
     CONSTRAINT wager_tx_provider_idempotency_uniq
         UNIQUE (provider_id, idempotency_key),
 
-    -- INTERNAL e OPENING sao a mesma coisa, nas duas direcoes. Uma constraint
-    -- so, em vez de uma para cada sentido.
-    CONSTRAINT wager_tx_origin_matches_kind CHECK (
-        (origin = 'INTERNAL') = (kind = 'OPENING')
-    ),
-
-    -- Operacao interna nao carrega nenhum campo externo: provedor, id
+    -- Abertura interna nao carrega nenhum campo externo: provedor, id
     -- externo, chave, hash, rodada, jogo e referencia.
-    CONSTRAINT wager_tx_internal_has_no_external_fields CHECK (
-        origin <> 'INTERNAL'
+    CONSTRAINT wager_tx_opening_has_no_external_fields CHECK (
+        kind <> 'OPENING'
         OR (provider_id IS NULL
             AND external_transaction_id IS NULL
             AND idempotency_key IS NULL
@@ -73,9 +67,10 @@ CREATE TABLE wager_transactions (
             AND reference_external_transaction_id IS NULL)
     ),
 
-    -- Operacao externa sempre tem provider, id externo, chave e hash.
+    -- Todo o resto vem de provider e precisa de identidade externa para
+    -- deduplicar. E o que torna a idempotencia persistente.
     CONSTRAINT wager_tx_external_requires_ids CHECK (
-        origin <> 'EXTERNAL'
+        kind = 'OPENING'
         OR (provider_id IS NOT NULL
             AND external_transaction_id IS NOT NULL
             AND idempotency_key IS NOT NULL
@@ -114,7 +109,7 @@ CREATE TABLE wager_transactions (
 );
 
 COMMENT ON TABLE wager_transactions IS
-    'Operacoes de wagering. origin distingue abertura interna de entrada externa.';
+    'Operacoes de wagering. kind = OPENING marca a abertura interna; qualquer outro valor veio de fora.';
 COMMENT ON COLUMN wager_transactions.amount IS
     'Unidades minimas. Negativo e usado no calculo de ROLLBACK; o saldo nunca e negativo.';
 COMMENT ON COLUMN wager_transactions.payload_hash IS
