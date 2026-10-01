@@ -6,19 +6,14 @@ CREATE TABLE wallet_ledger_entries (
     transaction_id UUID NOT NULL REFERENCES wager_transactions (id),
     direction ledger_direction NOT NULL,
     -- Unidades minimas, sempre positivo: a direcao carrega o sinal.
-    amount BIGINT NOT NULL,
-    currency CHAR(3) NOT NULL,
-    balance_before BIGINT NOT NULL,
-    balance_after BIGINT NOT NULL,
+    amount BIGINT NOT NULL CHECK (amount > 0),
+    currency CHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    balance_before BIGINT NOT NULL CHECK (balance_before >= 0),
+    balance_after BIGINT NOT NULL CHECK (balance_after >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT wallet_ledger_wallet_transaction_uniq
         UNIQUE (wallet_id, transaction_id),
-    CONSTRAINT wallet_ledger_amount_positive CHECK (amount > 0),
-    CONSTRAINT wallet_ledger_currency_iso4217 CHECK (currency ~ '^[A-Z]{3}$'),
-    CONSTRAINT wallet_ledger_balances_non_negative CHECK (
-        balance_before >= 0 AND balance_after >= 0
-    ),
 
     -- O enunciado exige validar balanceAfter = balanceBefore +- money.
     CONSTRAINT wallet_ledger_balance_arithmetic CHECK (

@@ -5,32 +5,27 @@ CREATE TABLE outbox (
     aggregate_type TEXT NOT NULL,
     aggregate_id UUID NOT NULL,
     event_type TEXT NOT NULL,
-    event_version INTEGER NOT NULL,
+    -- Versao do contrato do evento, definida pelo construtor. Permite
+    -- adicionar campos sem quebrar consumidores.
+    event_version INTEGER NOT NULL CHECK (event_version >= 1),
 
     correlation_id TEXT,
     causation_id UUID,
 
     -- Snapshot imutavel do envelope publicado. Nao e reescrito no retry.
-    payload JSONB NOT NULL,
+    payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
 
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    attempts INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    published_at TIMESTAMPTZ,
+    -- NULL enquanto o registro nao foi publicado.
+    published_at TIMESTAMPTZ CHECK (published_at IS NULL OR published_at >= occurred_at),
 
     -- Worker que assumiu o registro, para recuperar trabalho abandonado.
     locked_by TEXT,
     locked_at TIMESTAMPTZ,
 
-    CONSTRAINT outbox_event_version_positive CHECK (event_version >= 1),
-    CONSTRAINT outbox_attempts_non_negative CHECK (attempts >= 0),
-    CONSTRAINT outbox_payload_is_object CHECK (jsonb_typeof(payload) = 'object'),
-
-    -- So um registro pode estar publicado ou descartado, nunca os dois.
-    CONSTRAINT outbox_published_after_occurrence CHECK (
-        published_at IS NULL OR published_at >= occurred_at
-    ),
     CONSTRAINT outbox_lock_is_consistent CHECK (
         (locked_by IS NULL AND locked_at IS NULL)
         OR (locked_by IS NOT NULL AND locked_at IS NOT NULL)

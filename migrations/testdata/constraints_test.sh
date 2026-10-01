@@ -25,6 +25,21 @@ run() {
   fi
 }
 
+scalar() {
+  docker compose exec -T -e PGPASSWORD=wagering postgres psql -U wagering -d "$DB" \
+    -tAc "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+check() { # nome esperado query
+  local name="$1" want="$2" got
+  got="$(scalar "$3")"
+  if [ "$got" = "$want" ]; then
+    printf '  OK    %-4s %s\n' "val" "$name"; ok=$((ok+1))
+  else
+    printf '  FALHA esperava=%s recebeu=%s  %s\n' "$want" "$got" "$name"; bad=$((bad+1))
+  fi
+}
+
 # ---- seed -----------------------------------------------------------------
 docker compose exec -T -e PGPASSWORD=wagering postgres psql -U wagering -d "$DB" -q -v ON_ERROR_STOP=1 >/dev/null 2>&1 <<EOF
 INSERT INTO wallets (id, player_id, currency, balance) VALUES ('$W','$P','BRL',10000);
@@ -48,6 +63,24 @@ run "currency nao ISO barrada"            fail "INSERT INTO wallets (player_id,c
 run "(player,currency) duplicado barrado" fail "INSERT INTO wallets (player_id,currency,balance) VALUES ('$P','BRL',1)"
 run "outra moeda para mesmo jogador"      pass "INSERT INTO wallets (player_id,currency,balance) VALUES ('$P','USD',500)"
 run "carteira valida aceita"              pass "INSERT INTO wallets (player_id,currency,balance) VALUES ('$P','EUR',0)"
+
+echo "== version controlada pelo banco =="
+WVER="select version from wallets where id='$W'"
+WBAL="select balance from wallets where id='$W'"
+check "version inicial e 1"                1     "$WVER"
+run "update so do saldo"                   pass "UPDATE wallets SET balance=9000 WHERE id='$W'"
+check "saldo mudou"                         9000  "$WBAL"
+check "version incrementou sozinha"         2     "$WVER"
+run "update que nao mexe no saldo"         pass "UPDATE wallets SET currency='BRL' WHERE id='$W'"
+check "version intacta sem mudanca de saldo" 2    "$WVER"
+run "back tentando forcar a version"       pass "UPDATE wallets SET balance=8000, version=99 WHERE id='$W'"
+check "trigger ignorou a version enviada"  3     "$WVER"
+check "saldo aplicado mesmo assim"          8000  "$WBAL"
+scalar "UPDATE wallets SET balance=7000 WHERE id='$W' AND version=1" >/dev/null
+check "concorrencia perdida nao mexe no saldo" 8000 "$WBAL"
+scalar "UPDATE wallets SET balance=7000 WHERE id='$W' AND version=3" >/dev/null
+check "update com version atual aplica"     7000  "$WBAL"
+check "version foi para 4"                  4     "$WVER"
 
 echo "== tipos de operacao =="
 run "LOSS com valor != 0 barrado"         fail "INSERT INTO wager_transactions (origin,provider_id,external_transaction_id,idempotency_key,payload_hash,player_id,wallet_id,round_id,game_id,kind,currency,amount) VALUES ('EXTERNAL','pa','l1','pa:l1','h','$P','$W','r','g','LOSS','BRL',100)"

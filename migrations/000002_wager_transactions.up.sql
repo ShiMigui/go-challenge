@@ -12,9 +12,10 @@ CREATE TABLE wager_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     origin wager_origin NOT NULL,
+    kind wager_kind NOT NULL,
 
-    -- Somente para origem EXTERNAL. NULL impede claimed_at de ser usado
-    -- para Francionar a deduplicacao de operacoes internas.
+    -- Somente para origem EXTERNAL. NULL impede que uma operacao interna
+    -- ocupe a chave de deduplicacao de um provider.
     provider_id TEXT,
     external_transaction_id TEXT,
     idempotency_key TEXT,
@@ -24,12 +25,13 @@ CREATE TABLE wager_transactions (
     wallet_id UUID NOT NULL REFERENCES wallets (id),
     round_id TEXT,
     game_id TEXT,
-    kind wager_kind NOT NULL,
-    currency CHAR(3) NOT NULL,
+    currency CHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
 
-    -- Unidades minimas. NEGATIVOS permitidos internamente (ROLLBACK debita),
-    -- por isso a nao-negatividade fica na tabela e na regra do kind.
-    amount BIGINT NOT NULL,
+    -- Unidades minimas. LOSS nao movimenta dinheiro, todo movimento e positivo.
+    amount BIGINT NOT NULL CHECK (
+        (kind = 'LOSS' AND amount = 0)
+        OR (kind <> 'LOSS' AND amount > 0)
+    ),
 
     reference_external_transaction_id TEXT,
     reference_transaction_id UUID REFERENCES wager_transactions (id),
@@ -38,12 +40,12 @@ CREATE TABLE wager_transactions (
     failure_code TEXT,
     failure_message TEXT,
 
-    -- Recontagem da referencia pendente (PENDING_REFERENCE).
-    reference_attempts INTEGER NOT NULL DEFAULT 0,
+    -- Recontagem e espera do worker de referencias.
+    reference_attempts INTEGER NOT NULL DEFAULT 0 CHECK (reference_attempts >= 0),
     reference_next_attempt_at TIMESTAMPTZ,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now() CHECK (updated_at >= created_at),
     processed_at TIMESTAMPTZ,
     resolved_at TIMESTAMPTZ,
 
@@ -51,13 +53,15 @@ CREATE TABLE wager_transactions (
         UNIQUE (provider_id, external_transaction_id),
     CONSTRAINT wager_tx_provider_idempotency_uniq
         UNIQUE (provider_id, idempotency_key),
-    CONSTRAINT wager_tx_currency_iso4217 CHECK (currency ~ '^[A-Z]{3}$'),
-    CONSTRAINT wager_tx_reference_attempts_non_negative
-        CHECK (reference_attempts >= 0),
-    CONSTRAINT wager_tx_updated_after_created CHECK (updated_at >= created_at),
 
-    -- Operacao interna e sempre OPENING e nao carrega nenhum campo externo:
-    -- provedor, id externo, chave, hash, rodada, jogo e referencia.
+    -- INTERNAL e OPENING sao a mesma coisa, nas duas direcoes. Uma constraint
+    -- so, em vez de uma para cada sentido.
+    CONSTRAINT wager_tx_origin_matches_kind CHECK (
+        (origin = 'INTERNAL') = (kind = 'OPENING')
+    ),
+
+    -- Operacao interna nao carrega nenhum campo externo: provedor, id
+    -- externo, chave, hash, rodada, jogo e referencia.
     CONSTRAINT wager_tx_internal_has_no_external_fields CHECK (
         origin <> 'INTERNAL'
         OR (provider_id IS NULL
@@ -69,7 +73,7 @@ CREATE TABLE wager_transactions (
             AND reference_external_transaction_id IS NULL)
     ),
 
-    -- Operacao externa sempre tem provider, id externo e chave de idempotencia.
+    -- Operacao externa sempre tem provider, id externo, chave e hash.
     CONSTRAINT wager_tx_external_requires_ids CHECK (
         origin <> 'EXTERNAL'
         OR (provider_id IS NOT NULL
@@ -78,40 +82,13 @@ CREATE TABLE wager_transactions (
             AND payload_hash IS NOT NULL)
     ),
 
-    -- Somente OPENING vem da origem interna.
-    CONSTRAINT wager_tx_internal_only_opening CHECK (
-        origin <> 'INTERNAL' OR kind = 'OPENING'
+    -- Referencia externa existe exatamente para REFUND e ROLLBACK.
+    CONSTRAINT wager_tx_reference_iff_reversal CHECK (
+        (kind IN ('REFUND', 'ROLLBACK'))
+        = (reference_external_transaction_id IS NOT NULL)
     ),
 
-    -- OPENING e exclusivo da abertura interna: rejeitado quando chega de
-    -- HTTP ou SQS.
-    CONSTRAINT wager_tx_opening_only_internal CHECK (
-        kind <> 'OPENING' OR origin = 'INTERNAL'
-    ),
-
-    -- LOSS nao movimenta dinheiro.
-    CONSTRAINT wager_tx_loss_zero_amount CHECK (
-        kind <> 'LOSS' OR amount = 0
-    ),
-
-    -- BET, WIN, REFUND e ROLLBACK exigem valor positivo.
-    CONSTRAINT wager_tx_movement_positive CHECK (
-        kind = 'LOSS' OR kind = 'OPENING' OR amount > 0
-    ),
-
-    -- REFUND e ROLLBACK dependem de referencia externa.
-    CONSTRAINT wager_tx_reversal_requires_reference CHECK (
-        kind NOT IN ('REFUND', 'ROLLBACK')
-        OR reference_external_transaction_id IS NOT NULL
-    ),
-
-    -- Demais tipos nao carregam referencia externa.
-    CONSTRAINT wager_tx_non_reversal_has_no_reference CHECK (
-        kind IN ('REFUND', 'ROLLBACK')
-        OR reference_external_transaction_id IS NULL
-    ),
-
-    -- PENDING_REFERENCE exige a referencia interna ainda nao resolvida.
+    -- PENDING_REFERENCE espera a referencia interna.
     CONSTRAINT wager_tx_pending_reference_requires_unresolved CHECK (
         state <> 'PENDING_REFERENCE'
         OR reference_transaction_id IS NULL
