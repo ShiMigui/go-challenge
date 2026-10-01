@@ -1,0 +1,363 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/shimigui/go-challenge/internal/money"
+	"github.com/shimigui/go-challenge/internal/wager"
+)
+
+// ErrDuplicate é devolvido quando a identidade única já existe.
+//
+// Vale para (provider, external_transaction_id), (provider,
+// idempotency_key) e para a reversão única por referência. O chamador
+// trata como reentrega, não como erro.
+var ErrDuplicate = errors.New("registro duplicado")
+
+const wagerColumns = `id, kind, provider_id, external_transaction_id,
+	idempotency_key, payload_hash, player_id, wallet_id, round_id, game_id,
+	currency, amount, reference_external_transaction_id, reference_transaction_id,
+	state, failure_code, failure_message, reference_attempts,
+	reference_next_attempt_at, created_at, updated_at, processed_at`
+
+// WagerTransactionRepository persiste as operações de wagering.
+type WagerTransactionRepository interface {
+	// Insert grava a transação.
+	//
+	// Identidade repetida volta como ErrDuplicate, com a transação
+	// existente em Duplicate. É assim que a idempotência do provedor
+	// funciona: a reentrega encontra o registro anterior em vez de
+	// processar de novo.
+	Insert(ctx context.Context, tx *wager.Transaction) error
+	// FindByID devolve a transação pela identidade interna.
+	FindByID(ctx context.Context, id string) (*wager.Transaction, error)
+	// FindByExternalID devolve a transação pelo par (provider, id externo).
+	FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error)
+	// FindByIdempotencyKey devolve a transação pela chave de deduplicação.
+	FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error)
+	// UpdateState grava estado, falha, carimbo de conclusão e a espera da
+	// referência. Só estado não terminal é aceito.
+	UpdateState(ctx context.Context, tx *wager.Transaction) error
+	// ResolveReference associa a referência interna já resolvida.
+	ResolveReference(ctx context.Context, tx *wager.Transaction) error
+	// ListPendingReferences devolve as transações esperando referência cujo
+	// prazo já venceu, para o worker reprocessar.
+	ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error)
+}
+
+// Duplicate carrega a transação que já existia quando houve violação de
+// unicidade.
+type Duplicate struct {
+	Err       error
+	Existing  *wager.Transaction
+	Operation string
+}
+
+// Error devolve a descrição do conflito.
+func (d *Duplicate) Error() string {
+	if d.Existing != nil {
+		return d.Err.Error() + ": " + d.Operation + " de " + d.Existing.ID()
+	}
+	return d.Err.Error() + ": " + d.Operation
+}
+
+// Unwrap expõe a causa para errors.Is.
+func (d *Duplicate) Unwrap() error { return d.Err }
+
+// PostgresWagerTransaction é a implementação sobre o Postgres.
+type PostgresWagerTransaction struct {
+	db Querier
+}
+
+// NewWagerTransactionRepository devolve o repositório de transações.
+func NewWagerTransactionRepository(db Querier) *PostgresWagerTransaction {
+	return &PostgresWagerTransaction{db: db}
+}
+
+// Insert grava a transação ou devolve a que já existia.
+func (r *PostgresWagerTransaction) Insert(ctx context.Context, tx *wager.Transaction) error {
+	if err := validUUID("transaction_id", tx.ID()); err != nil {
+		return err
+	}
+	if err := validUUID("player_id", tx.PlayerID()); err != nil {
+		return err
+	}
+	if err := validUUID("wallet_id", tx.WalletID()); err != nil {
+		return err
+	}
+	const q = `
+		INSERT INTO wager_transactions (
+			id, kind, provider_id, external_transaction_id, idempotency_key,
+			payload_hash, player_id, wallet_id, round_id, game_id, currency,
+			amount, reference_external_transaction_id, state
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+		)
+		ON CONFLICT DO NOTHING
+		RETURNING id
+	`
+	var id string
+	err := r.db.QueryRowContext(ctx, q,
+		tx.ID(), string(tx.Kind()), nullString(tx.ProviderID()),
+		nullString(tx.ExternalID()), nullString(tx.IdempotencyKey()),
+		nullString(tx.PayloadHash()), tx.PlayerID(), tx.WalletID(),
+		nullString(tx.RoundID()), nullString(tx.GameID()),
+		string(tx.Currency()), tx.Amount().Amount(),
+		nullString(tx.ReferenceExternalID()), string(tx.State()),
+	).Scan(&id)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	// ON CONFLICT DO NOTHING devolve zero linhas: a identidade já existe.
+	// A busca seguinte diz qual delas, para o chamador responder com o
+	// resultado anterior em vez de erro.
+	existente, err := r.findByIdentity(ctx, tx)
+	if err != nil {
+		return err
+	}
+	return &Duplicate{Err: ErrDuplicate, Existing: existente, Operation: "insert"}
+}
+
+// findByIdentity procura a transação que colidiu com a inserção.
+func (r *PostgresWagerTransaction) findByIdentity(ctx context.Context, tx *wager.Transaction) (*wager.Transaction, error) {
+	if tx.ProviderID() != "" && tx.ExternalID() != "" {
+		if achada, err := r.FindByExternalID(ctx, tx.ProviderID(), tx.ExternalID()); err == nil {
+			return achada, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+	}
+	if tx.ProviderID() != "" && tx.IdempotencyKey() != "" {
+		if achada, err := r.FindByIdempotencyKey(ctx, tx.ProviderID(), tx.IdempotencyKey()); err == nil {
+			return achada, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+	}
+	// OPENING não tem identidade externa: a colisão só pode ser o id.
+	if achada, err := r.FindByID(ctx, tx.ID()); err == nil {
+		return achada, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	// Nenhuma identidade localizei o conflito. Existing fica vazio, mas o
+	// erro ainda é *Duplicate: o chamador decide o que fazer com reentrega
+	// e não deve precisar conhecer a causa interna.
+	return nil, nil
+}
+
+// FindByID devolve a transação pela identidade interna.
+func (r *PostgresWagerTransaction) FindByID(ctx context.Context, id string) (*wager.Transaction, error) {
+	if err := validUUID("transaction_id", id); err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + wagerColumns + ` FROM wager_transactions WHERE id = $1`
+	return r.scanOne(ctx, q, id)
+}
+
+// FindByExternalID devolve a transação pelo par (provider, id externo).
+func (r *PostgresWagerTransaction) FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error) {
+	q := `SELECT ` + wagerColumns + `
+		FROM wager_transactions
+		WHERE provider_id = $1 AND external_transaction_id = $2`
+	return r.scanOne(ctx, q, providerID, externalID)
+}
+
+// FindByIdempotencyKey devolve a transação pela chave de deduplicação.
+func (r *PostgresWagerTransaction) FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error) {
+	q := `SELECT ` + wagerColumns + `
+		FROM wager_transactions
+		WHERE provider_id = $1 AND idempotency_key = $2`
+	return r.scanOne(ctx, q, providerID, key)
+}
+
+// UpdateState grava a transição de estado.
+func (r *PostgresWagerTransaction) UpdateState(ctx context.Context, tx *wager.Transaction) error {
+	if err := validUUID("transaction_id", tx.ID()); err != nil {
+		return err
+	}
+	// A cláusula de estado protege contra transição concorrente: se
+	// outra instância já levou a transação a um terminal, zero linhas.
+	const q = `
+		UPDATE wager_transactions
+		SET state = $1,
+			failure_code = $2,
+			failure_message = $3,
+			processed_at = $4,
+			reference_next_attempt_at = $5,
+			updated_at = $6
+		WHERE id = $7
+			AND state IN ('PENDING', 'PENDING_REFERENCE')
+	`
+	var processedAt any
+	if tx.HasProcessedAt() {
+		processedAt = tx.ProcessedAt()
+	}
+	var nextAttempt any
+	if !tx.ReferenceNextAttempt().IsZero() {
+		nextAttempt = tx.ReferenceNextAttempt()
+	}
+	res, err := r.db.ExecContext(ctx, q,
+		string(tx.State()), nullString(tx.FailureCode()),
+		nullString(tx.FailureMessage()), processedAt, nextAttempt,
+		tx.UpdatedAt(), tx.ID(),
+	)
+	if err != nil {
+		return err
+	}
+	afetadas, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if afetadas == 0 {
+		// Zero linhas com id existente significa estado terminal: a
+		// transição já aconteceu e não pode ser repetida.
+		var existe int
+		err := r.db.QueryRowContext(ctx,
+			`SELECT 1 FROM wager_transactions WHERE id = $1`, tx.ID()).Scan(&existe)
+		switch {
+		case err == sql.ErrNoRows:
+			return fmt.Errorf("%w: transaction %s", ErrNotFound, tx.ID())
+		case err != nil:
+			return err
+		default:
+			return fmt.Errorf("%w: transaction %s", wager.ErrTerminalTransition, tx.ID())
+		}
+	}
+	return nil
+}
+
+// ResolveReference associa a referência interna à transação pendente.
+func (r *PostgresWagerTransaction) ResolveReference(ctx context.Context, tx *wager.Transaction) error {
+	if err := validUUID("transaction_id", tx.ID()); err != nil {
+		return err
+	}
+	if err := validUUID("reference_id", tx.ReferenceID()); err != nil {
+		return err
+	}
+	const q = `
+		UPDATE wager_transactions
+		SET reference_transaction_id = $1, updated_at = $2
+		WHERE id = $3 AND state = 'PENDING_REFERENCE'
+	`
+	res, err := r.db.ExecContext(ctx, q, tx.ReferenceID(), tx.UpdatedAt(), tx.ID())
+	if err != nil {
+		return err
+	}
+	afetadas, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if afetadas == 0 {
+		return fmt.Errorf("%w: transaction %s nao esta em PENDING_REFERENCE",
+			wager.ErrInvalidStateTransition, tx.ID())
+	}
+	return nil
+}
+
+// ListPendingReferences devolve as esperas vencidas, mais antigas primeiro.
+func (r *PostgresWagerTransaction) ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error) {
+	if limite <= 0 {
+		limite = 100
+	}
+	const q = `
+		SELECT ` + wagerColumns + `
+		FROM wager_transactions
+		WHERE state = 'PENDING_REFERENCE'
+			AND (reference_next_attempt_at IS NULL OR reference_next_attempt_at <= $1)
+		ORDER BY reference_next_attempt_at NULLS FIRST, created_at
+		LIMIT $2
+	`
+	rows, err := r.db.QueryContext(ctx, q, agora, limite)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var saida []*wager.Transaction
+	for rows.Next() {
+		tx, err := scanWager(rows)
+		if err != nil {
+			return nil, err
+		}
+		saida = append(saida, tx)
+	}
+	return saida, rows.Err()
+}
+
+func (r *PostgresWagerTransaction) scanOne(ctx context.Context, q string, args ...any) (*wager.Transaction, error) {
+	row := r.db.QueryRowContext(ctx, q, args...)
+	tx, err := scanWager(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %v", ErrNotFound, args)
+		}
+		return nil, err
+	}
+	return tx, nil
+}
+
+// scanner é o que *sql.Row e *sql.Rows têm em comum para Scan.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanWager(s scanner) (*wager.Transaction, error) {
+	var (
+		id, kind, currency, state string
+		providerID, externalID    sql.NullString
+		idempotency, payloadHash  sql.NullString
+		playerID, walletID        string
+		roundID, gameID           sql.NullString
+		amount                    int64
+		referenceExtID            sql.NullString
+		referenceID               sql.NullString
+		failureCode               sql.NullString
+		failureMessage            sql.NullString
+		referenceAttempts         int
+		referenceNext             sql.NullTime
+		createdAt, updatedAt      time.Time
+		processedAt               sql.NullTime
+	)
+	err := s.Scan(
+		&id, &kind, &providerID, &externalID, &idempotency, &payloadHash,
+		&playerID, &walletID, &roundID, &gameID, &currency, &amount,
+		&referenceExtID, &referenceID, &state, &failureCode, &failureMessage,
+		&referenceAttempts, &referenceNext, &createdAt, &updatedAt, &processedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	valor, err := money.New(amount, money.Currency(currency))
+	if err != nil {
+		return nil, fmt.Errorf("transaction %s: %w", id, err)
+	}
+	return wager.Rehydrate(
+		id, wager.Kind(kind), wager.State(state),
+		playerID, walletID, money.Currency(currency), valor,
+		stringFromNull(roundID), stringFromNull(gameID),
+		stringFromNull(providerID), stringFromNull(externalID),
+		stringFromNull(idempotency), stringFromNull(payloadHash),
+		stringFromNull(referenceExtID), stringFromNull(referenceID),
+		stringFromNull(failureCode), stringFromNull(failureMessage),
+		referenceAttempts, timeOrZero(referenceNext),
+		createdAt, updatedAt, timeOrZero(processedAt), processedAt.Valid,
+	), nil
+}
+
+func timeOrZero(nt sql.NullTime) time.Time {
+	if !nt.Valid {
+		return time.Time{}
+	}
+	return nt.Time
+}
+
+func nullTime() sql.NullTime { return sql.NullTime{} }
+
+func timeValido() sql.NullTime { return sql.NullTime{Time: t0, Valid: true} }
