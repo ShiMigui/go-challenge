@@ -15,8 +15,8 @@ CREATE TABLE wager_transactions (
     -- ela seria estado duplicado, sempre igual a (kind = 'OPENING').
     kind wager_kind NOT NULL,
 
-    -- Somente para origem EXTERNAL. NULL impede que uma operacao interna
-    -- ocupe a chave de deduplicacao de um provider.
+    -- NULL em OPENING. E o que impede que uma abertura interna ocupe a
+    -- chave de deduplicacao de um provider.
     provider_id TEXT,
     external_transaction_id TEXT,
     idempotency_key TEXT,
