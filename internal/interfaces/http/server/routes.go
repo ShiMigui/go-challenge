@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
-	"github.com/shimigui/go-challenge/internal/api/handler"
-	"github.com/shimigui/go-challenge/internal/api/middleware"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/handler"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
 )
 
 func NewRouter(

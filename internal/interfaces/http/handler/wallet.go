@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/api/dto"
-	"github.com/shimigui/go-challenge/internal/api/middleware"
 	"github.com/shimigui/go-challenge/internal/application/wallet"
 	"github.com/shimigui/go-challenge/internal/domain/money"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
 )
 
 type WalletHandler struct {

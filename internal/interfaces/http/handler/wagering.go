@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/api/dto"
-	"github.com/shimigui/go-challenge/internal/api/middleware"
 	"github.com/shimigui/go-challenge/internal/application/wagering"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
 )
 
 type WageringHandler struct {

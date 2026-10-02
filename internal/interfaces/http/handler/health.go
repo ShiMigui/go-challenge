@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/shimigui/go-challenge/internal/api/dto"
-	"github.com/shimigui/go-challenge/internal/api/middleware"
 	"github.com/shimigui/go-challenge/internal/application/ports"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
 )
 
 type HealthHandler struct {

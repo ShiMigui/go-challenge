@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/shimigui/go-challenge/internal/api/dto"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
 )
 
 func RespondError(w http.ResponseWriter, r *http.Request, err *dto.DomainError) {

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/shimigui/go-challenge/internal/api/dto"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
 )
 
 type contextKey string

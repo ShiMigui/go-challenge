@@ -8,8 +8,8 @@ package fxapp
 import (
 	"go.uber.org/fx"
 
-	"github.com/shimigui/go-challenge/internal/api/handler"
-	"github.com/shimigui/go-challenge/internal/api/server"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/handler"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/server"
 )
 
 var Module = fx.Module("api",
