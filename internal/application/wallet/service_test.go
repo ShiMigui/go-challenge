@@ -137,9 +137,9 @@ func newMemTxManager() *memTxManager {
 
 func (m *memTxManager) InTransaction(ctx context.Context, fn func(ports.UnitOfWork) error) error {
 	m.rods++
-	carteiras, lancamentos := m.uow.snapshot()
+	carteiras, lancamentos, txns, eventos := m.uow.snapshot()
 	if err := fn(m.uow); err != nil {
-		m.uow.restore(carteiras, lancamentos)
+		m.uow.restore(carteiras, lancamentos, txns, eventos)
 		return err
 	}
 	return nil
@@ -157,7 +157,7 @@ func newMemUoW() *memUoW {
 	return &memUoW{
 		wallets:  newMemWalletRepo(),
 		ledger:   &memLedgerRepo{},
-		txns:     &memTxnRepo{},
+		txns:     newMemTxnRepo(),
 		events:   &memEventsRepo{},
 		messages: &memInboxRepo{},
 	}
@@ -171,46 +171,116 @@ func (u *memUoW) Transactions() wager.WagerTransactionRepository {
 func (u *memUoW) Events() event.OutboxRepository  { return u.events }
 func (u *memUoW) Messages() ports.InboxRepository { return u.messages }
 
-func (u *memUoW) snapshot() (wallets map[string]domainwallet.Wallet, lancamentos []ledger.Entry) {
+func (u *memUoW) snapshot() (wallets map[string]domainwallet.Wallet, lancamentos []ledger.Entry, txns map[string]wager.Transaction, eventos []event.Event) {
 	wallets = make(map[string]domainwallet.Wallet, len(u.wallets.porID))
 	for k, v := range u.wallets.porID {
 		wallets[k] = v
 	}
 	lancamentos = make([]ledger.Entry, len(u.ledger.lancamentos))
 	copy(lancamentos, u.ledger.lancamentos)
-	return wallets, lancamentos
+	txns = make(map[string]wager.Transaction, len(u.txns.porID))
+	for k, v := range u.txns.porID {
+		txns[k] = v
+	}
+	eventos = make([]event.Event, len(u.events.publicados))
+	copy(eventos, u.events.publicados)
+	return wallets, lancamentos, txns, eventos
 }
 
-func (u *memUoW) restore(carteiras map[string]domainwallet.Wallet, lancamentos []ledger.Entry) {
+func (u *memUoW) restore(carteiras map[string]domainwallet.Wallet, lancamentos []ledger.Entry, txns map[string]wager.Transaction, eventos []event.Event) {
 	u.wallets.porID = carteiras
 	u.ledger.lancamentos = lancamentos
+	u.txns.porID = txns
+	u.events.publicados = eventos
 }
 
-// memTxnRepo, memEventsRepo e memInboxRepo só satisfazem a UnitOfWork no
-// caso de uso de carteira — ele não escreve nesses stores.
-type memTxnRepo struct{}
+// memTxnRepo guarda as transações escritas no caso de uso de carteira: a
+// abertura nova é inserida e concluída, exatamente como no banco.
+type memTxnRepo struct {
+	porID map[string]wager.Transaction
+}
 
-func (r *memTxnRepo) Insert(ctx context.Context, tx *wager.Transaction) error { return nil }
-func (r *memTxnRepo) FindByID(ctx context.Context, id string) (*wager.Transaction, error) {
-	return nil, wager.ErrTransactionNotFound
+func newMemTxnRepo() *memTxnRepo {
+	return &memTxnRepo{porID: map[string]wager.Transaction{}}
 }
-func (r *memTxnRepo) FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error) {
-	return nil, wager.ErrTransactionNotFound
-}
-func (r *memTxnRepo) FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error) {
-	return nil, wager.ErrTransactionNotFound
-}
-func (r *memTxnRepo) UpdateState(ctx context.Context, tx *wager.Transaction) error { return nil }
-func (r *memTxnRepo) ResolveReference(ctx context.Context, tx *wager.Transaction) error {
+
+func (r *memTxnRepo) Insert(ctx context.Context, tx *wager.Transaction) error {
+	if anterior, ok := r.porID[tx.ID()]; ok {
+		copia := anterior
+		return &wager.Duplicate{Err: wager.ErrDuplicate, Existing: &copia, Operation: "insert"}
+	}
+	r.porID[tx.ID()] = *tx
 	return nil
 }
-func (r *memTxnRepo) ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error) {
-	return nil, nil
+
+func (r *memTxnRepo) FindByID(ctx context.Context, id string) (*wager.Transaction, error) {
+	tx, ok := r.porID[id]
+	if !ok {
+		return nil, wager.ErrTransactionNotFound
+	}
+	copia := tx
+	return &copia, nil
 }
 
-type memEventsRepo struct{}
+func (r *memTxnRepo) FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error) {
+	for _, tx := range r.porID {
+		if tx.ProviderID() == providerID && tx.ExternalID() == externalID {
+			copia := tx
+			return &copia, nil
+		}
+	}
+	return nil, wager.ErrTransactionNotFound
+}
 
-func (r *memEventsRepo) Append(ctx context.Context, e *event.Event) error { return nil }
+func (r *memTxnRepo) FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error) {
+	for _, tx := range r.porID {
+		if tx.ProviderID() == providerID && tx.IdempotencyKey() == key {
+			copia := tx
+			return &copia, nil
+		}
+	}
+	return nil, wager.ErrTransactionNotFound
+}
+
+func (r *memTxnRepo) UpdateState(ctx context.Context, tx *wager.Transaction) error {
+	r.porID[tx.ID()] = *tx
+	return nil
+}
+
+func (r *memTxnRepo) ResolveReference(ctx context.Context, tx *wager.Transaction) error {
+	r.porID[tx.ID()] = *tx
+	return nil
+}
+
+func (r *memTxnRepo) ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error) {
+	var pendentes []*wager.Transaction
+	for _, tx := range r.porID {
+		copia := tx
+		if copia.State() == wager.StatePendingReference &&
+			!copia.ReferenceNextAttempt().IsZero() &&
+			!copia.ReferenceNextAttempt().After(agora) {
+			pendentes = append(pendentes, &copia)
+		}
+	}
+	if limite > 0 && len(pendentes) > limite {
+		pendentes = pendentes[:limite]
+	}
+	return pendentes, nil
+}
+
+// memEventsRepo guarda os eventos da outbox escritos na transação.
+type memEventsRepo struct {
+	publicados []event.Event
+	errAppend  error
+}
+
+func (r *memEventsRepo) Append(ctx context.Context, e *event.Event) error {
+	if r.errAppend != nil {
+		return r.errAppend
+	}
+	r.publicados = append(r.publicados, *e)
+	return nil
+}
 func (r *memEventsRepo) ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*event.Event, error) {
 	return nil, nil
 }
@@ -314,6 +384,60 @@ func TestCreateWalletComSaldo(t *testing.T) {
 	if persistida.Balance().String() != "100.00" {
 		t.Errorf("saldo persistido = %s", persistida.Balance())
 	}
+
+	// Abertura com saldo movimenta no mesmo commit: um OPENING processado,
+	// o crédito no ledger e os dois eventos do fato.
+	if len(tm.uow.txns.porID) != 1 {
+		t.Fatalf("OPENING não persistido: %d transações", len(tm.uow.txns.porID))
+	}
+	for _, op := range tm.uow.txns.porID {
+		if op.Kind() != wager.KindOpening || op.State() != wager.StateProcessed {
+			t.Errorf("abertura = %s/%s, quer OPENING/PROCESSED", op.Kind(), op.State())
+		}
+		if got := op.ObservedBalance().String(); got != "100.00" {
+			t.Errorf("saldo observado da abertura = %s, quer 100.00", got)
+		}
+		if op.WalletID() != wlt.ID() {
+			t.Errorf("abertura de %s ligada à carteira %s", op.WalletID(), wlt.ID())
+		}
+	}
+	lancamentos, err := tm.uow.ledger.ListByWallet(context.Background(), wlt.ID(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lancamentos) != 1 {
+		t.Fatalf("lançamentos = %d, quer 1", len(lancamentos))
+	}
+	if lancamentos[0].Direction() != ledger.Credit || lancamentos[0].Amount().String() != "100.00" {
+		t.Errorf("lançamento = %s %s", lancamentos[0].Direction(), lancamentos[0].Amount())
+	}
+	if lancamentos[0].BalanceBefore().String() != "0.00" || lancamentos[0].BalanceAfter().String() != "100.00" {
+		t.Errorf("par antes/depois = %s -> %s",
+			lancamentos[0].BalanceBefore(), lancamentos[0].BalanceAfter())
+	}
+	if len(tm.uow.events.publicados) != 2 {
+		t.Fatalf("eventos = %d, quer 2 (processamento + saldo)", len(tm.uow.events.publicados))
+	}
+	tipos := map[string]bool{}
+	for _, evt := range tm.uow.events.publicados {
+		tipos[evt.EventType()] = true
+		switch evt.EventType() {
+		case "WalletBalanceChanged":
+			if evt.AggregateID() != wlt.ID() {
+				t.Error("WalletBalanceChanged aponta para agregado errado")
+			}
+		case "WagerTransactionProcessed":
+			if evt.AggregateID() != "" {
+				// Aponta para a abertura interna, única transação gravada.
+				if _, ok := tm.uow.txns.porID[evt.AggregateID()]; !ok {
+					t.Error("WagerTransactionProcessed aponta para transação inexistente")
+				}
+			}
+		}
+	}
+	if !tipos["WagerTransactionProcessed"] || !tipos["WalletBalanceChanged"] {
+		t.Errorf("eventos esperados ausentes: %v", tipos)
+	}
 }
 
 func TestCreateWalletComSaldoZero(t *testing.T) {
@@ -331,6 +455,18 @@ func TestCreateWalletComSaldoZero(t *testing.T) {
 	}
 	if wlt.Version() != 1 {
 		t.Errorf("versão = %d, quer 1", wlt.Version())
+	}
+
+	// Abertura sem saldo não movimenta: sem OPENING, sem lançamento e sem
+	// eventos — só a carteira existe.
+	if len(tm.uow.txns.porID) != 0 {
+		t.Errorf("abertura zero não devia gravar OPENING, veio %d", len(tm.uow.txns.porID))
+	}
+	if len(tm.uow.ledger.lancamentos) != 0 {
+		t.Errorf("abertura zero não devia lançar no ledger, veio %d", len(tm.uow.ledger.lancamentos))
+	}
+	if len(tm.uow.events.publicados) != 0 {
+		t.Errorf("abertura zero não devia publicar eventos, veio %d", len(tm.uow.events.publicados))
 	}
 }
 
@@ -371,6 +507,29 @@ func TestCreateWalletPropagaErroDoPortDeEscrita(t *testing.T) {
 		money.Zero(money.BRL), func() time.Time { return t0 })
 	if !errors.Is(err, errBancoForaDoAr) {
 		t.Fatalf("esperava erro do port de escrita, veio %v", err)
+	}
+}
+
+func TestCreateWalletDesfazAberturaQuandoEventoFalha(t *testing.T) {
+	// A publicação da outbox falha: a abertura precisa ir junto para o
+	// rollback — carteira, OPENING, lançamento e o evento que já entrou.
+	tm := newMemTxManager()
+	tm.uow.events.errAppend = errBancoForaDoAr
+	svc := wallet.NewService(tm.uow.wallets, tm.uow.ledger, tm)
+
+	_, err := svc.CreateWallet(context.Background(), "player-1",
+		money.MustParse("100.00", money.BRL), func() time.Time { return t0 })
+	if !errors.Is(err, errBancoForaDoAr) {
+		t.Fatalf("esperava falha da outbox, veio %v", err)
+	}
+	if len(tm.uow.wallets.porID) != 0 {
+		t.Error("carteira sobreviveu ao rollback com evento falho")
+	}
+	if len(tm.uow.txns.porID) != 0 || len(tm.uow.ledger.lancamentos) != 0 {
+		t.Error("OPENING ou lançamento sobreviveu ao rollback com evento falho")
+	}
+	if len(tm.uow.events.publicados) != 0 {
+		t.Error("evento publicado sobreviveu ao rollback")
 	}
 }
 
