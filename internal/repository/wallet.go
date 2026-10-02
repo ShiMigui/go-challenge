@@ -37,23 +37,18 @@ type WalletRepository interface {
 	LockByID(ctx context.Context, id string) (*wallet.Wallet, error)
 }
 
-// PostgresWallet é a implementação sobre o Postgres.
-type PostgresWallet struct {
+// walletRepository é a implementação sobre o banco.
+type walletRepository struct {
 	db Querier
 }
 
 // NewWalletRepository devolve o repositório de carteira.
 func NewWalletRepository(db Querier) WalletRepository {
-	return &PostgresWallet{db: db}
-}
-
-// NewWalletRepositoryWithTx creates a repository bound to the given transaction.
-func NewWalletRepositoryWithTx(tx *sql.Tx) WalletRepository {
-	return &PostgresWallet{db: tx}
+	return &walletRepository{db: db}
 }
 
 // Insert grava a carteira e carimba o id gerado pelo banco.
-func (r *PostgresWallet) Insert(ctx context.Context, w *wallet.Wallet) error {
+func (r *walletRepository) Insert(ctx context.Context, w *wallet.Wallet) error {
 	if err := validUUID("wallet_id", w.ID()); err != nil {
 		return err
 	}
@@ -70,7 +65,7 @@ func (r *PostgresWallet) Insert(ctx context.Context, w *wallet.Wallet) error {
 }
 
 // UpdateBalance grava o saldo novo se a versão lida ainda for a atual.
-func (r *PostgresWallet) UpdateBalance(ctx context.Context, w *wallet.Wallet) error {
+func (r *walletRepository) UpdateBalance(ctx context.Context, w *wallet.Wallet) error {
 	if err := validUUID("wallet_id", w.ID()); err != nil {
 		return err
 	}
@@ -107,7 +102,7 @@ func (r *PostgresWallet) UpdateBalance(ctx context.Context, w *wallet.Wallet) er
 }
 
 // FindByID devolve a carteira pela identidade.
-func (r *PostgresWallet) FindByID(ctx context.Context, id string) (*wallet.Wallet, error) {
+func (r *walletRepository) FindByID(ctx context.Context, id string) (*wallet.Wallet, error) {
 	if err := validUUID("wallet_id", id); err != nil {
 		return nil, err
 	}
@@ -116,7 +111,7 @@ func (r *PostgresWallet) FindByID(ctx context.Context, id string) (*wallet.Walle
 }
 
 // FindByPlayerAndCurrency devolve a carteira do jogador na moeda.
-func (r *PostgresWallet) FindByPlayerAndCurrency(ctx context.Context, playerID string, currency money.Currency) (*wallet.Wallet, error) {
+func (r *walletRepository) FindByPlayerAndCurrency(ctx context.Context, playerID string, currency money.Currency) (*wallet.Wallet, error) {
 	if err := validUUID("player_id", playerID); err != nil {
 		return nil, err
 	}
@@ -125,7 +120,7 @@ func (r *PostgresWallet) FindByPlayerAndCurrency(ctx context.Context, playerID s
 }
 
 // LockByID devolve a carteira travada para a transação corrente.
-func (r *PostgresWallet) LockByID(ctx context.Context, id string) (*wallet.Wallet, error) {
+func (r *walletRepository) LockByID(ctx context.Context, id string) (*wallet.Wallet, error) {
 	if err := validUUID("wallet_id", id); err != nil {
 		return nil, err
 	}
@@ -133,7 +128,7 @@ func (r *PostgresWallet) LockByID(ctx context.Context, id string) (*wallet.Walle
 	return r.scanOne(ctx, q, id)
 }
 
-func (r *PostgresWallet) scanOne(ctx context.Context, q string, args ...any) (*wallet.Wallet, error) {
+func (r *walletRepository) scanOne(ctx context.Context, q string, args ...any) (*wallet.Wallet, error) {
 	var (
 		id, playerID, currency string
 		balance, version       int64
