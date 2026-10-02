@@ -43,8 +43,13 @@ type PostgresWallet struct {
 }
 
 // NewWalletRepository devolve o repositório de carteira.
-func NewWalletRepository(db Querier) *PostgresWallet {
+func NewWalletRepository(db Querier) WalletRepository {
 	return &PostgresWallet{db: db}
+}
+
+// NewWalletRepositoryWithTx creates a repository bound to the given transaction.
+func NewWalletRepositoryWithTx(tx *sql.Tx) WalletRepository {
+	return &PostgresWallet{db: tx}
 }
 
 // Insert grava a carteira e carimba o id gerado pelo banco.
