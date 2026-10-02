@@ -13,13 +13,24 @@ services:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+      - ./scripts/postgres/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  migrate:
+    image: postgres:17-alpine
+    restart: no
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts/postgres/migrations:/migrations:ro
+      - ./scripts/postgres/migrate.sh:/migrate.sh:ro
+    command: ["sh", "/migrate.sh"]
 
   localstack:
     image: localstack/localstack:4
@@ -79,8 +90,8 @@ services:
         GO_VERSION: 1.27.1
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       localstack:
         condition: service_healthy
       keycloak:
