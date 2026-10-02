@@ -1,30 +1,33 @@
-// Package repository traz a persistência dos agregados.
+// Package persistence implementa a infraestrutura de banco: repositórios,
+// transação e prontidão.
 //
 // Os repositórios falam com o banco por database/sql, sem driver
 // importado: quem registra o driver é o wiring, não o domínio. Isso deixa
 // o go.mod sob controle e mantém estas funções testáveis com qualquer
 // driver compatível.
-package repository
+package persistence
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 )
 
 var (
 	// ErrNotFound é devolvido quando o registro não existe.
+	//
+	// É o sentinela interno da infraestrutura para entradas auxiliares
+	// (inbox, outbox e lançamentos avulsos). Carteira e wagering têm o
+	// not-found próprio dos agregados: wallet.ErrWalletNotFound e
+	// wager.ErrTransactionNotFound.
 	ErrNotFound = errors.New("registro nao encontrado")
 	// ErrOptimisticLock é devolvido quando a versão mudou desde a leitura.
 	ErrOptimisticLock = errors.New("concorrencia otimista: versao desatualizada")
 	// ErrMessageTampered é devolvido quando a reentrega traz outro corpo.
 	ErrMessageTampered = errors.New("mensagem reentregue com hash diferente")
-	// ErrAlreadyCompleted é devolvido ao completar mensagem já concluída.
-	ErrAlreadyCompleted = errors.New("mensagem ja concluida")
 )
 
 // Querier é o que *sql.DB e *sql.Tx têm em comum.
@@ -66,13 +69,4 @@ func stringFromNull(ns sql.NullString) string {
 		return ""
 	}
 	return ns.String
-}
-
-// timePtr devolve o ponteiro que o Scan espera para TIMESTAMPTZ anulável.
-func timePtr(nt sql.NullTime) *time.Time {
-	if !nt.Valid {
-		return nil
-	}
-	t := nt.Time
-	return &t
 }

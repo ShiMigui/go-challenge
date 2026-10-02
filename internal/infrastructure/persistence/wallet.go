@@ -1,4 +1,4 @@
-package repository
+package persistence
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func (r *walletRepository) UpdateBalance(ctx context.Context, w *wallet.Wallet) 
 		err := r.db.QueryRowContext(ctx, `SELECT 1 FROM wallets WHERE id = $1`, w.ID()).Scan(&existe)
 		switch {
 		case err == sql.ErrNoRows:
-			return fmt.Errorf("%w: wallet %s", ErrNotFound, w.ID())
+			return fmt.Errorf("%w: wallet %s", wallet.ErrWalletNotFound, w.ID())
 		case err != nil:
 			return err
 		default:
@@ -114,7 +114,7 @@ func (r *walletRepository) scanOne(ctx context.Context, q string, args ...any) (
 	row := r.db.QueryRowContext(ctx, q, args...)
 	if err := row.Scan(&id, &playerID, &currency, &balance, &version, &createdAt, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("%w: wallet %v", ErrNotFound, args)
+			return nil, fmt.Errorf("%w: wallet %v", wallet.ErrWalletNotFound, args)
 		}
 		return nil, err
 	}

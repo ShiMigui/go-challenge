@@ -1,4 +1,4 @@
-package repository
+package persistence
 
 import (
 	"context"
@@ -286,18 +286,17 @@ func nullTime() sql.NullTime { return sql.NullTime{} }
 
 func timeValido() sql.NullTime { return sql.NullTime{Time: t0, Valid: true} }
 
-func TestTimePtr(t *testing.T) {
-	// Helper de scan: NULL tem de virar nil, senão o ponteiro nil
-	// viraria um time.Time zero e a transação pareceria concluída.
-	if timePtr(nullTime()) != nil {
-		t.Error("NULL deveria virar nil")
+func TestTimeOrZero(t *testing.T) {
+	// Helper de scan: NULL tem de virar instante zero, e um valor
+	// presente precisa preservar o horário que veio do banco.
+	if !timeOrZero(nullTime()).IsZero() {
+		t.Error("NULL deveria virar instante zero")
 	}
-	if timePtr(timeValido()) == nil {
-		t.Error("valor presente deveria virar ponteiro")
-	}
-	// O valor precisa ser o que veio do banco, não um zero silencioso.
-	if got := timePtr(timeValido()); got != nil && got.IsZero() {
+	if timeOrZero(timeValido()).IsZero() {
 		t.Error("valor presente não pode virar instante zero")
+	}
+	if !timeOrZero(timeValido()).Equal(t0) {
+		t.Error("valor presente precisa preservar o horário do banco")
 	}
 }
 

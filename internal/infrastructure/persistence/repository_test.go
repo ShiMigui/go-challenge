@@ -1,14 +1,14 @@
-package repository
+package persistence
 
 import (
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/application/ports"
 	"github.com/shimigui/go-challenge/internal/domain/event"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
@@ -113,8 +113,8 @@ func TestWalletFindNaoEncontrado(t *testing.T) {
 	repo := NewWalletRepository(db)
 
 	_, err := repo.FindByID(context.Background(), walletID)
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("esperava ErrNotFound, veio %v", err)
+	if !errors.Is(err, wallet.ErrWalletNotFound) {
+		t.Errorf("esperava wallet.ErrWalletNotFound, veio %v", err)
 	}
 }
 
@@ -195,8 +195,8 @@ func TestWalletUpdateNaoEncontrado(t *testing.T) {
 
 	w := novaCarteira(t, walletID, playerID, "100.00")
 	err := repo.UpdateBalance(context.Background(), w)
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("esperava ErrNotFound, veio %v", err)
+	if !errors.Is(err, wallet.ErrWalletNotFound) {
+		t.Errorf("esperava wallet.ErrWalletNotFound, veio %v", err)
 	}
 }
 
@@ -783,7 +783,7 @@ func TestInTransactionUsaTransacao(t *testing.T) {
 	repo := NewTransactionManager(db)
 
 	rodou := false
-	err := repo.InTransaction(context.Background(), func(*sql.Tx) error {
+	err := repo.InTransaction(context.Background(), func(ports.UnitOfWork) error {
 		rodou = true
 		return nil
 	})
@@ -800,7 +800,7 @@ func TestInTransactionPropagaErroDaFuncao(t *testing.T) {
 	repo := NewTransactionManager(db)
 
 	falha := errors.New("falha de negocio")
-	err := repo.InTransaction(context.Background(), func(*sql.Tx) error { return falha })
+	err := repo.InTransaction(context.Background(), func(ports.UnitOfWork) error { return falha })
 	if !errors.Is(err, falha) {
 		t.Errorf("esperava a falha original, veio %v", err)
 	}

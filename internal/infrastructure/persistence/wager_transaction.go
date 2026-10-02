@@ -1,4 +1,4 @@
-package repository
+package persistence
 
 import (
 	"context"
@@ -79,21 +79,21 @@ func (r *wagerRepository) findByIdentity(ctx context.Context, tx *wager.Transact
 	if tx.ProviderID() != "" && tx.ExternalID() != "" {
 		if achada, err := r.FindByExternalID(ctx, tx.ProviderID(), tx.ExternalID()); err == nil {
 			return achada, nil
-		} else if !errors.Is(err, ErrNotFound) {
+		} else if !errors.Is(err, wager.ErrTransactionNotFound) {
 			return nil, err
 		}
 	}
 	if tx.ProviderID() != "" && tx.IdempotencyKey() != "" {
 		if achada, err := r.FindByIdempotencyKey(ctx, tx.ProviderID(), tx.IdempotencyKey()); err == nil {
 			return achada, nil
-		} else if !errors.Is(err, ErrNotFound) {
+		} else if !errors.Is(err, wager.ErrTransactionNotFound) {
 			return nil, err
 		}
 	}
 	// OPENING não tem identidade externa: a colisão só pode ser o id.
 	if achada, err := r.FindByID(ctx, tx.ID()); err == nil {
 		return achada, nil
-	} else if !errors.Is(err, ErrNotFound) {
+	} else if !errors.Is(err, wager.ErrTransactionNotFound) {
 		return nil, err
 	}
 	// Nenhuma identidade localizei o conflito. Existing fica vazio, mas o
@@ -173,7 +173,7 @@ func (r *wagerRepository) UpdateState(ctx context.Context, tx *wager.Transaction
 			`SELECT 1 FROM wager_transactions WHERE id = $1`, tx.ID()).Scan(&existe)
 		switch {
 		case err == sql.ErrNoRows:
-			return fmt.Errorf("%w: transaction %s", ErrNotFound, tx.ID())
+			return fmt.Errorf("%w: transaction %s", wager.ErrTransactionNotFound, tx.ID())
 		case err != nil:
 			return err
 		default:
@@ -245,7 +245,7 @@ func (r *wagerRepository) scanOne(ctx context.Context, q string, args ...any) (*
 	tx, err := scanWager(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: %v", ErrNotFound, args)
+			return nil, fmt.Errorf("%w: %v", wager.ErrTransactionNotFound, args)
 		}
 		return nil, err
 	}
