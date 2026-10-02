@@ -776,12 +776,12 @@ func TestOutboxCorrelationNaoAlteraOriginal(t *testing.T) {
 	}
 }
 
-func TestWithTxUsaTransacao(t *testing.T) {
+func TestInTransactionUsaTransacao(t *testing.T) {
 	db := abrirFalso(t, "tx1", func(c consulta) resposta { return resposta{afetadas: 1} })
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionManager(db)
 
 	rodou := false
-	err := repo.WithTx(context.Background(), func(*sql.Tx) error {
+	err := repo.InTransaction(context.Background(), func(*sql.Tx) error {
 		rodou = true
 		return nil
 	})
@@ -793,38 +793,14 @@ func TestWithTxUsaTransacao(t *testing.T) {
 	}
 }
 
-func TestWithTxPropagaErroDaFuncao(t *testing.T) {
+func TestInTransactionPropagaErroDaFuncao(t *testing.T) {
 	db := abrirFalso(t, "tx2", func(c consulta) resposta { return resposta{afetadas: 1} })
-	repo := NewTransactionRepository(db)
+	repo := NewTransactionManager(db)
 
 	falha := errors.New("falha de negocio")
-	err := repo.WithTx(context.Background(), func(*sql.Tx) error { return falha })
+	err := repo.InTransaction(context.Background(), func(*sql.Tx) error { return falha })
 	if !errors.Is(err, falha) {
 		t.Errorf("esperava a falha original, veio %v", err)
-	}
-}
-
-func TestIsUUID(t *testing.T) {
-	validos := []string{
-		"11111111-1111-1111-1111-111111111111",
-		"aBcDeF01-2345-6789-abcd-ef0123456789",
-	}
-	for _, v := range validos {
-		if !isUUID(v) {
-			t.Errorf("%q deveria ser UUID", v)
-		}
-	}
-	invalidos := []string{
-		"", "abc", "11111111-1111-1111-1111-11111111111",
-		"11111111111111111111111111111111",
-		"11111111_1111_1111_1111_111111111111",
-		"1111111-1111-1111-1111-111111111111",
-		"11111111-1111-1111-1111-11111111111g",
-	}
-	for _, v := range invalidos {
-		if isUUID(v) {
-			t.Errorf("%q não deveria ser UUID", v)
-		}
 	}
 }
 

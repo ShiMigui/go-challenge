@@ -1,6 +1,6 @@
 // Package repository traz a persistência dos agregados.
 //
-// Os repositórios falam com o Postgres por database/sql, sem driver
+// Os repositórios falam com o banco por database/sql, sem driver
 // importado: quem registra o driver é o wiring, não o domínio. Isso deixa
 // o go.mod sob controle e mantém estas funções testáveis com qualquer
 // driver compatível.
@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 )
 
 var (
@@ -37,35 +39,16 @@ type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// validUUID confere o formato 8-4-4-4-12 em hexadecimal.
+// validUUID confere o formato do identificador antes de tocar o banco.
 //
 // A checagem existe para devolver um erro claro. Sem ela, uma string
-// inválida chega ao Postgres e volta como erro de cast, que parece falha
-// de banco em vez de entrada ruim.
+// inválida chega ao driver e volta como erro de cast, que parece falha de
+// infraestrutura em vez de entrada ruim.
 func validUUID(field, value string) error {
-	if !isUUID(value) {
+	if !identifier.IsValid(value) {
 		return fmt.Errorf("%w: %s = %q", ErrInvalidID, field, value)
 	}
 	return nil
-}
-
-func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i := 0; i < 36; i++ {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if s[i] != '-' {
-				return false
-			}
-			continue
-		}
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
 }
 
 // nullString transforma string vazia em NULL.

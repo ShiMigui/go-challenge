@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Driver falso para exercitar os repositórios sem Postgres.
+// Driver falso para exercitar os repositórios sem banco real.
 //
 // Existe por dois motivos: o go.mod fica sem driver de produção, e os
 // testes verificam o que o repositório faz com o banco (SQL enviado,
