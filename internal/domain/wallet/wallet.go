@@ -185,9 +185,11 @@ func (w *Wallet) validateMutation(amount money.Money, op string) error {
 	return nil
 }
 
-// applyMutation aplica a mutação comum: atualiza saldo, versão e timestamp.
+// applyMutation aplica a mutação comum: atualiza saldo e timestamp.
+// A versão é incrementada pelo trigger do banco (wallets_bump_version),
+// não pelo back: isso garante atomicidade consistente entre aplicação
+// e persistência, evitando race conditions de concorrência otimista.
 func (w *Wallet) applyMutation(newBalance money.Money, now time.Time) {
 	w.balance = newBalance
-	w.version++
 	w.updatedAt = now
 }
