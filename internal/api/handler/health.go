@@ -7,18 +7,14 @@ import (
 
 	"github.com/shimigui/go-challenge/internal/api/dto"
 	"github.com/shimigui/go-challenge/internal/api/middleware"
+	"github.com/shimigui/go-challenge/internal/application/ports"
 )
 
-type HealthChecker interface {
-	CheckDatabase(ctx context.Context) error
-	CheckMessaging(ctx context.Context) error
-}
-
 type HealthHandler struct {
-	checker HealthChecker
+	checker ports.HealthChecker
 }
 
-func NewHealthHandler(checker HealthChecker) *HealthHandler {
+func NewHealthHandler(checker ports.HealthChecker) *HealthHandler {
 	return &HealthHandler{checker: checker}
 }
 

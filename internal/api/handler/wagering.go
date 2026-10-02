@@ -7,16 +7,17 @@ import (
 
 	"github.com/shimigui/go-challenge/internal/api/dto"
 	"github.com/shimigui/go-challenge/internal/api/middleware"
+	"github.com/shimigui/go-challenge/internal/application/wagering"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
 )
 
 type WageringHandler struct {
-	svc wager.Service
+	svc wagering.Service
 }
 
-func NewWageringHandler(svc wager.Service) *WageringHandler {
+func NewWageringHandler(svc wagering.Service) *WageringHandler {
 	return &WageringHandler{svc: svc}
 }
 
@@ -55,17 +56,17 @@ func (h *WageringHandler) SubmitTransaction(w http.ResponseWriter, r *http.Reque
 		Now:            time.Now(),
 	}
 
-	tx, err := h.svc.SubmitTransaction(r.Context(), params)
+	res, err := h.svc.SubmitTransaction(r.Context(), params)
 	if err != nil {
 		middleware.RespondError(w, r, dto.MapDomainError(err))
 		return
 	}
 
 	middleware.RespondJSON(w, r, http.StatusOK, dto.CreateTransactionResponse{
-		TransactionID:    tx.ID(),
-		Status:           dto.TransactionState(tx.State()),
-		Balance:          dto.MoneyPayload{Amount: tx.Amount().String(), Currency: string(tx.Currency())},
-		IdempotentReplay: false, // o serviço ainda não expõe o sinal de replay
+		TransactionID:    res.Transaction.ID(),
+		Status:           dto.TransactionState(res.Transaction.State()),
+		Balance:          dto.MoneyPayload{Amount: res.Transaction.Amount().String(), Currency: string(res.Transaction.Currency())},
+		IdempotentReplay: res.Replayed,
 	})
 }
 

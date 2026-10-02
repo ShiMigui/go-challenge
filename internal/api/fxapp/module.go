@@ -1,8 +1,8 @@
 // Package fxapp monta a camada HTTP: handlers e rotas.
 //
-// Os serviços entram por interface (wallet.Service, wager.Service),
-// fornecidos pelo módulo de service. A ordem de fornecimento não importa:
-// o Fx resolve o grafo no início.
+// Os serviços entram por interface (wallet.Service, wagering.Service),
+// fornecidos pelo módulo de application. A ordem de fornecimento não
+// importa: o Fx resolve o grafo no início.
 package fxapp
 
 import (

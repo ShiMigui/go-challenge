@@ -28,10 +28,6 @@ type WagerTransactionRepository interface {
 	FindByExternalID(ctx context.Context, providerID, externalID string) (*Transaction, error)
 	// FindByIdempotencyKey devolve a transação pela chave de deduplicação.
 	FindByIdempotencyKey(ctx context.Context, providerID, key string) (*Transaction, error)
-	// CheckIdempotency verifica se uma chave de idempotência já foi usada
-	// com o mesmo hash de payload. Se o hash for diferente, retorna
-	// ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
-	CheckIdempotency(ctx context.Context, key, payloadHash string) error
 	// UpdateState grava estado, falha, carimbo de conclusão e a espera da
 	// referência. Só estado não terminal é aceito.
 	UpdateState(ctx context.Context, tx *Transaction) error

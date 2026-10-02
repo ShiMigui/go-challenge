@@ -116,6 +116,8 @@ func MapDomainError(err error) *DomainError {
 		return ErrNotFound(err)
 	case errors.Is(err, wallet.ErrDuplicateWallet):
 		return ErrConflict(err)
+	case errors.Is(err, wager.ErrDuplicate):
+		return ErrConflict(err)
 	case errors.Is(err, wallet.ErrInsufficientFunds):
 		return ErrInsufficientFundsError(err)
 	case errors.Is(err, wager.ErrIdempotencyConflict):

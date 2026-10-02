@@ -7,8 +7,8 @@ import (
 
 	"github.com/shimigui/go-challenge/internal/api/dto"
 	"github.com/shimigui/go-challenge/internal/api/middleware"
+	"github.com/shimigui/go-challenge/internal/application/wallet"
 	"github.com/shimigui/go-challenge/internal/domain/money"
-	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
 
 type WalletHandler struct {

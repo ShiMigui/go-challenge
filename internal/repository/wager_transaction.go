@@ -127,26 +127,6 @@ func (r *wagerRepository) FindByIdempotencyKey(ctx context.Context, providerID, 
 	return r.scanOne(ctx, q, providerID, key)
 }
 
-// CheckIdempotency verifica se uma chave de idempotência já foi usada
-// com o mesmo hash de payload. Se o hash for diferente, retorna
-// ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
-func (r *wagerRepository) CheckIdempotency(ctx context.Context, key, payloadHash string) error {
-	const q = `SELECT payload_hash FROM wager_transactions WHERE idempotency_key = $1`
-	var storedHash string
-	err := r.db.QueryRowContext(ctx, q, key).Scan(&storedHash)
-	if err == sql.ErrNoRows {
-		return nil // chave não existe, sem conflito
-	}
-	if err != nil {
-		return err
-	}
-	if storedHash != payloadHash {
-		return fmt.Errorf("%w: chave %s com hashes %s e %s",
-			wager.ErrIdempotencyConflict, key, payloadHash, storedHash)
-	}
-	return nil // mesmo hash, reentrega válida
-}
-
 // UpdateState grava a transição de estado.
 func (r *wagerRepository) UpdateState(ctx context.Context, tx *wager.Transaction) error {
 	if err := validUUID("transaction_id", tx.ID()); err != nil {
