@@ -331,7 +331,10 @@ func assertSemMovimento(t *testing.T, h *memTxManager) {
 	}
 }
 
-const novxs = "tx-1"
+const novxs = "22222222-2222-4222-8222-222222222222"
+
+// refUUID é a identidade da transação referenciada nos testes.
+const refUUID = "33333333-3333-4333-8333-333333333333"
 
 // ===== BET (débito) =====
 
@@ -394,17 +397,32 @@ func TestSubmitBetProcessaDebito(t *testing.T) {
 	if stored.HasProcessedAt() == false {
 		t.Error("processado não carimbado")
 	}
+	if !stored.HasObservedBalance() || stored.ObservedBalance().String() != "75.00" {
+		t.Errorf("saldo observado persistido = %v, quer 75.00", stored.ObservedBalance())
+	}
 	if h.uow.txns.updateCalls != 1 {
 		t.Errorf("UpdateState chamado %d vezes, quer 1", h.uow.txns.updateCalls)
 	}
 
-	// Evento de domínio publicado via outbox na mesma transação.
-	if len(h.uow.events.eventos) != 1 {
-		t.Fatalf("eventos = %d, quer 1", len(h.uow.events.eventos))
+	// Dois eventos de domínio na mesma transação: o processamento da
+	// operação e a mudança do saldo da carteira.
+	if len(h.uow.events.eventos) != 2 {
+		t.Fatalf("eventos = %d, quer 2", len(h.uow.events.eventos))
 	}
-	evt := h.uow.events.eventos[0]
+	if h.uow.events.eventos[0].EventType() != "WagerTransactionProcessed" {
+		t.Errorf("primeiro evento = %s, quer WagerTransactionProcessed", h.uow.events.eventos[0].EventType())
+	}
+	if h.uow.events.eventos[0].AggregateType() != "wager_transaction" || h.uow.events.eventos[0].AggregateID() != novxs {
+		t.Errorf("agregado do processado = %s/%s", h.uow.events.eventos[0].AggregateType(), h.uow.events.eventos[0].AggregateID())
+	}
+	payload := string(h.uow.events.eventos[0].Payload())
+	if !strings.Contains(payload, `"kind":"BET"`) || !strings.Contains(payload, `"observedBalance":{"amount":"75.00","currency":"BRL"}`) {
+		t.Errorf("payload do processado = %s", payload)
+	}
+
+	evt := h.uow.events.eventos[1]
 	if evt.EventType() != "WalletBalanceChanged" {
-		t.Errorf("eventType = %s", evt.EventType())
+		t.Errorf("segundo evento = %s", evt.EventType())
 	}
 	if evt.AggregateType() != "wallet" || evt.AggregateID() != "11111111-1111-4111-8111-111111111111" {
 		t.Errorf("agregado = %s/%s", evt.AggregateType(), evt.AggregateID())
@@ -412,13 +430,16 @@ func TestSubmitBetProcessaDebito(t *testing.T) {
 	if evt.Version() != 1 {
 		t.Errorf("versão do evento = %d, quer 1", evt.Version())
 	}
-	payload := string(evt.Payload())
-	if !strings.Contains(payload, `"walletId":"11111111-1111-4111-8111-111111111111"`) || !strings.Contains(payload, `"balance":"75.00"`) {
+	payload = string(evt.Payload())
+	if !strings.Contains(payload, `"walletId":"11111111-1111-4111-8111-111111111111"`) ||
+		!strings.Contains(payload, `"balanceBefore":{"amount":"100.00","currency":"BRL"}`) ||
+		!strings.Contains(payload, `"balanceAfter":{"amount":"75.00","currency":"BRL"}`) ||
+		!strings.Contains(payload, `"walletVersion":2`) {
 		t.Errorf("payload = %s", payload)
 	}
 }
 
-func TestSubmitBetSaldoInsuficienteRolaBack(t *testing.T) {
+func TestSubmitBetSaldoInsuficienteRejeitaCommitado(t *testing.T) {
 	h := novoHarness()
 	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
 		t.Fatal(err)
@@ -428,26 +449,53 @@ func TestSubmitBetSaldoInsuficienteRolaBack(t *testing.T) {
 	params := betParams(novxs)
 	params.Amount = money.MustParse("80.00", money.BRL)
 
-	_, err := svc.SubmitTransaction(context.Background(), params)
-	if !errors.Is(err, domainwallet.ErrInsufficientFunds) {
-		t.Fatalf("esperava ErrInsufficientFunds, veio %v", err)
+	// A recusa é resposta de negócio, não erro de infraestrutura: a
+	// transação vira REJECTED persistida com o código estável e o evento é
+	// publicado — uma reentrega responde a mesma recusa.
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("rejeição deveria vir como resultado, veio erro %v", err)
+	}
+	if res.Replayed {
+		t.Error("primeira submissão não é reentrega")
+	}
+	if res.Transaction.State() != wager.StateRejected {
+		t.Fatalf("estado = %s, quer REJECTED", res.Transaction.State())
+	}
+	if res.Transaction.FailureCode() != "INSUFFICIENT_FUNDS" {
+		t.Errorf("failureCode = %s, quer INSUFFICIENT_FUNDS", res.Transaction.FailureCode())
 	}
 
-	// Rollback: saldo intacto, nada no ledger/outbox, transação não persiste.
+	// Rejeição commitada: a operação existe, o saldo não muda, o ledger
+	// continua vazio e um evento de recusa foi publicado.
+	stored, err := h.uow.txns.FindByID(context.Background(), novxs)
+	if err != nil {
+		t.Fatalf("transação rejeitada deveria estar persistida: %v", err)
+	}
+	if stored.State() != wager.StateRejected || stored.FailureCode() != "INSUFFICIENT_FUNDS" {
+		t.Errorf("estado persistido = %s/%s", stored.State(), stored.FailureCode())
+	}
+
 	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
 	if got := w.Balance().String(); got != "50.00" {
-		t.Errorf("saldo após rollback = %s, quer 50.00", got)
+		t.Errorf("saldo após rejeição = %s, quer 50.00", got)
 	}
-	assertSemMovimento(t, h)
-	if _, err := h.uow.txns.FindByID(context.Background(), novxs); !errors.Is(err, wager.ErrTransactionNotFound) {
-		t.Errorf("transação deveria ter desfeito o insert, veio %v", err)
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Errorf("rejeição não pode lançar no ledger, veio %d", len(h.uow.ledger.lancamentos))
 	}
-	if h.uow.txns.updateCalls != 0 {
-		t.Errorf("UpdateState não deveria ser chamado, veio %d", h.uow.txns.updateCalls)
+	if len(h.uow.events.eventos) != 1 {
+		t.Fatalf("eventos = %d, quer 1 (recusa)", len(h.uow.events.eventos))
+	}
+	evt := h.uow.events.eventos[0]
+	if evt.EventType() != "WagerTransactionRejected" {
+		t.Errorf("eventType = %s, quer WagerTransactionRejected", evt.EventType())
+	}
+	if !strings.Contains(string(evt.Payload()), `"failureCode":"INSUFFICIENT_FUNDS"`) {
+		t.Errorf("payload = %s", evt.Payload())
 	}
 }
 
-func TestSubmitBetCarteiraInexistente(t *testing.T) {
+func TestSubmitBetCarteiraInexistenteDesfazTudo(t *testing.T) {
 	h := novoHarness()
 	svc := wagering.NewService(h.uow.txns, h)
 
@@ -456,6 +504,9 @@ func TestSubmitBetCarteiraInexistente(t *testing.T) {
 		t.Fatalf("esperava ErrWalletNotFound, veio %v", err)
 	}
 	assertSemMovimento(t, h)
+	if _, err := h.uow.txns.FindByID(context.Background(), novxs); !errors.Is(err, wager.ErrTransactionNotFound) {
+		t.Errorf("carteira inexistente deveria desfazer a transação, veio %v", err)
+	}
 }
 
 // ===== WIN (crédito) =====
@@ -486,11 +537,14 @@ func TestSubmitWinCreditaSaldo(t *testing.T) {
 	if len(h.uow.ledger.lancamentos) != 1 || h.uow.ledger.lancamentos[0].Direction() != ledger.Credit {
 		t.Errorf("esperava um CREDIT, veio %d lançamentos", len(h.uow.ledger.lancamentos))
 	}
+	if !res.Transaction.HasObservedBalance() || res.Transaction.ObservedBalance().String() != "25.00" {
+		t.Errorf("saldo observado = %v, quer 25.00", res.Transaction.ObservedBalance())
+	}
 }
 
-// ===== LOSS (sem movimento) =====
+// ===== LOSS (sem movimento, com saldo observado) =====
 
-func TestSubmitLossNaoMoveSaldo(t *testing.T) {
+func TestSubmitLossNaoMoveSaldoMasObserva(t *testing.T) {
 	h := novoHarness()
 	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
 		t.Fatal(err)
@@ -508,14 +562,33 @@ func TestSubmitLossNaoMoveSaldo(t *testing.T) {
 	if res.Transaction.State() != wager.StateProcessed {
 		t.Errorf("estado = %s, quer PROCESSED", res.Transaction.State())
 	}
+	if !res.Transaction.HasObservedBalance() || res.Transaction.ObservedBalance().String() != "50.00" {
+		t.Errorf("LOSS deveria carregar o saldo observado, veio %v", res.Transaction.ObservedBalance())
+	}
 
 	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
 	if got := w.Balance().String(); got != "50.00" {
 		t.Errorf("LOSS não pode mover saldo, veio %s", got)
 	}
-	assertSemMovimento(t, h)
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Errorf("LOSS não pode lançar no ledger, veio %d", len(h.uow.ledger.lancamentos))
+	}
 	if h.uow.txns.updateCalls != 1 {
 		t.Errorf("UpdateState deveria encerrar o LOSS, veio %d chamadas", h.uow.txns.updateCalls)
+	}
+
+	// LOSS publica o WagerTransactionProcessed (com saldo observado) e não
+	// publica WalletBalanceChanged: nenhuma alteração de saldo aconteceu.
+	if len(h.uow.events.eventos) != 1 {
+		t.Fatalf("eventos = %d, quer 1", len(h.uow.events.eventos))
+	}
+	evt := h.uow.events.eventos[0]
+	if evt.EventType() != "WagerTransactionProcessed" {
+		t.Errorf("eventType = %s, quer WagerTransactionProcessed", evt.EventType())
+	}
+	if !strings.Contains(string(evt.Payload()), `"kind":"LOSS"`) ||
+		!strings.Contains(string(evt.Payload()), `"observedBalance":{"amount":"50.00","currency":"BRL"}`) {
+		t.Errorf("payload do LOSS = %s", evt.Payload())
 	}
 }
 
@@ -534,9 +607,128 @@ func TestSubmitLossComValorRejeitado(t *testing.T) {
 	assertSemMovimento(t, h)
 }
 
+// apostaProcessada grava no harness uma aposta concluída, pronta para
+// servir de referência a REFUND/ROLLBACK.
+func apostaProcessada(t *testing.T, h *memTxManager, id string) *wager.Transaction {
+	t.Helper()
+	tx := mustTransactionRevertido(t, id)
+	if err := tx.SetObservedBalance(money.MustParse("75.00", money.BRL)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.MarkProcessed(t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.uow.txns.Insert(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+
+// vitoriaProcessada grava uma WIN concluída, referência de um ROLLBACK.
+func vitoriaProcessada(t *testing.T, h *memTxManager, id string) *wager.Transaction {
+	t.Helper()
+	tx := mustTransactionRevertido(t, id)
+	tx2, err := wager.NewExternal(wager.ExternalParams{
+		ID: tx.ID(), ProviderID: "provider-1", ExternalID: "ext-" + id,
+		IdempotencyKey: "key-" + id, PayloadHash: "hash-" + id,
+		PlayerID: "player-1", WalletID: "11111111-1111-4111-8111-111111111111",
+		Kind: wager.KindWin, Amount: money.MustParse("25.00", money.BRL),
+		RoundID: "round-1", GameID: "game-1", Now: t0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx2.SetObservedBalance(money.MustParse("125.00", money.BRL)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx2.MarkProcessed(t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.uow.txns.Insert(context.Background(), tx2); err != nil {
+		t.Fatal(err)
+	}
+	return tx2
+}
+
 // ===== REFUND (crédito com referência) =====
 
 func TestSubmitRefundCreditaComReferencia(t *testing.T) {
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	apostaProcessada(t, h, "33333333-3333-4333-8333-333333333333")
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StateProcessed {
+		t.Errorf("estado = %s", res.Transaction.State())
+	}
+	if res.Transaction.ReferenceID() == "" {
+		t.Error("referência interna deveria estar resolvida")
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "35.00" {
+		t.Errorf("saldo = %s, quer 35.00 (10.00 + 25.00)", got)
+	}
+	if len(h.uow.ledger.lancamentos) != 1 || h.uow.ledger.lancamentos[0].Direction() != ledger.Credit {
+		t.Errorf("esperava um CREDIT do refund, veio %d lançamentos", len(h.uow.ledger.lancamentos))
+	}
+	if len(h.uow.events.eventos) != 2 {
+		t.Errorf("refund deveria publicar processamento + saldo, veio %d eventos", len(h.uow.events.eventos))
+	}
+
+	// A resolução da referência foi persistida junto com a conclusão.
+	stored, err := h.uow.txns.FindByID(context.Background(), novxs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReferenceID() != "33333333-3333-4333-8333-333333333333" {
+		t.Errorf("referência persistida = %q, quer tx-ref", stored.ReferenceID())
+	}
+}
+
+func TestSubmitRefundReferenciaAindaPendenteEspera(t *testing.T) {
+	// A referência chegou (a aposta existe) mas ainda não foi processada: a
+	// reversão espera em PENDING_REFERENCE, não opera às cegas.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.uow.txns.Insert(context.Background(), mustTransactionRevertido(t, "33333333-3333-4333-8333-333333333333")); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StatePendingReference {
+		t.Fatalf("estado = %s, quer PENDING_REFERENCE", res.Transaction.State())
+	}
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("pendência não pode lançar no ledger")
+	}
+	if len(h.uow.events.eventos) != 1 || h.uow.events.eventos[0].EventType() != "WagerTransactionPendingReference" {
+		t.Errorf("esperava o evento de espera, veio %d eventos", len(h.uow.events.eventos))
+	}
+}
+
+func TestSubmitRefundSemReferenciaNaoEncontradaEspera(t *testing.T) {
 	h := novoHarness()
 	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
 		t.Fatal(err)
@@ -546,21 +738,73 @@ func TestSubmitRefundCreditaComReferencia(t *testing.T) {
 	params := betParams(novxs)
 	params.Kind = wager.KindRefund
 	params.Amount = money.MustParse("25.00", money.BRL)
-	params.ReferenceExtID = "ext-bet-original"
+	params.ReferenceExtID = "ext-que-nao-existe"
 
 	res, err := svc.SubmitTransaction(context.Background(), params)
 	if err != nil {
 		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if res.Transaction.State() != wager.StateProcessed {
-		t.Errorf("estado = %s", res.Transaction.State())
+	if res.Transaction.State() != wager.StatePendingReference {
+		t.Fatalf("estado = %s, quer PENDING_REFERENCE", res.Transaction.State())
+	}
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("pendência não pode lançar no ledger")
+	}
+	// Prazo inicial baseado na submissão, para o worker retomar depois.
+	if res.Transaction.ReferenceNextAttempt().IsZero() {
+		t.Error("pendência sem prazo de retomada")
+	}
+}
+
+func TestSubmitRefundReferenciaIncompativelRejeita(t *testing.T) {
+	// Referência de outro jogador: REFERENCE_MISMATCH, recusa persistida.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	aposta := mustTransactionRevertido(t, "33333333-3333-4333-8333-333333333333")
+	aposta2, err := wager.NewExternal(wager.ExternalParams{
+		ID: aposta.ID(), ProviderID: "provider-1", ExternalID: "ext-33333333-3333-4333-8333-333333333333",
+		IdempotencyKey: "key-33333333-3333-4333-8333-333333333333", PayloadHash: "hash-33333333-3333-4333-8333-333333333333",
+		PlayerID: "outro-jogador", WalletID: "11111111-1111-4111-8111-111111111111",
+		Kind: wager.KindBet, Amount: money.MustParse("25.00", money.BRL),
+		RoundID: "round-1", GameID: "game-1", Now: t0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aposta2.MarkProcessed(t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.uow.txns.Insert(context.Background(), aposta2); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StateRejected {
+		t.Fatalf("estado = %s, quer REJECTED", res.Transaction.State())
+	}
+	if res.Transaction.FailureCode() != "REFERENCE_MISMATCH" {
+		t.Errorf("failureCode = %s, quer REFERENCE_MISMATCH", res.Transaction.FailureCode())
 	}
 	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
-	if got := w.Balance().String(); got != "35.00" {
-		t.Errorf("saldo = %s, quer 35.00 (10.00 + 25.00)", got)
+	if got := w.Balance().String(); got != "10.00" {
+		t.Errorf("rejeição movimentou saldo: %s", got)
 	}
-	if len(h.uow.ledger.lancamentos) != 1 || h.uow.ledger.lancamentos[0].Direction() != ledger.Credit {
-		t.Errorf("esperava um CREDIT do refund, veio %d lançamentos", len(h.uow.ledger.lancamentos))
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("rejeição não pode lançar no ledger")
+	}
+	if len(h.uow.events.eventos) != 1 || h.uow.events.eventos[0].EventType() != "WagerTransactionRejected" {
+		t.Errorf("esperava o evento de recusa, veio %d eventos", len(h.uow.events.eventos))
 	}
 }
 
@@ -580,9 +824,11 @@ func TestSubmitRefundSemReferenciaRejeitado(t *testing.T) {
 	assertSemMovimento(t, h)
 }
 
-// ===== ROLLBACK (reversão não resolvida: erro) =====
+// ===== ROLLBACK (reversão com referência resolvida) =====
 
-func TestSubmitRollbackSemReferenciaResolvidaErra(t *testing.T) {
+func TestSubmitRollbackSemReferenciaEspera(t *testing.T) {
+	// ROLLBACK pede a referência: sem ela (ainda não chegou), a operação
+	// espera em PENDING_REFERENCE — nunca movimenta saldo às cegas.
 	h := novoHarness()
 	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
 		t.Fatal(err)
@@ -594,21 +840,153 @@ func TestSubmitRollbackSemReferenciaResolvidaErra(t *testing.T) {
 	params.Amount = money.MustParse("25.00", money.BRL)
 	params.ReferenceExtID = "ext-bet-original"
 
-	// A reversão pede a referência resolvida (worker de referências); sem
-	// ela, o sentido do movimento não existe e a submissão recusa — nunca
-	// movimenta saldo às cegas.
-	_, err := svc.SubmitTransaction(context.Background(), params)
-	if err == nil {
-		t.Fatal("ROLLBACK sem referência resolvida deveria falhar")
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if !errors.Is(err, wager.ErrInvalidKind) {
-		t.Fatalf("esperava ErrInvalidKind, veio %v", err)
+	if res.Transaction.State() != wager.StatePendingReference {
+		t.Errorf("estado = %s, quer PENDING_REFERENCE", res.Transaction.State())
 	}
 	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
 	if got := w.Balance().String(); got != "50.00" {
-		t.Errorf("saldo = %s, quer 50.00 (rollback desfeito)", got)
+		t.Errorf("saldo = %s, quer 50.00", got)
 	}
-	assertSemMovimento(t, h)
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("pendência não pode lançar no ledger")
+	}
+}
+
+func TestSubmitRollbackDeApostaCredita(t *testing.T) {
+	// Desfazer um BET credita o valor apostado.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
+		t.Fatal(err)
+	}
+	apostaProcessada(t, h, "33333333-3333-4333-8333-333333333333")
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRollback
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StateProcessed {
+		t.Fatalf("estado = %s, quer PROCESSED", res.Transaction.State())
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "75.00" {
+		t.Errorf("saldo = %s, quer 75.00 (50.00 + 25.00)", got)
+	}
+	if len(h.uow.ledger.lancamentos) != 1 || h.uow.ledger.lancamentos[0].Direction() != ledger.Credit {
+		t.Errorf("esperava um CREDIT do rollback de aposta, veio %d lançamentos", len(h.uow.ledger.lancamentos))
+	}
+}
+
+func TestSubmitRollbackDeWinDebita(t *testing.T) {
+	// Desfazer um WIN debita o prêmio pago.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
+		t.Fatal(err)
+	}
+	vitoriaProcessada(t, h, "33333333-3333-4333-8333-333333333333")
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRollback
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StateProcessed {
+		t.Fatalf("estado = %s, quer PROCESSED", res.Transaction.State())
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "25.00" {
+		t.Errorf("saldo = %s, quer 25.00 (50.00 - 25.00)", got)
+	}
+	if len(h.uow.ledger.lancamentos) != 1 || h.uow.ledger.lancamentos[0].Direction() != ledger.Debit {
+		t.Errorf("esperava um DEBIT do rollback de win, veio %d lançamentos", len(h.uow.ledger.lancamentos))
+	}
+}
+
+func TestSubmitRollbackDeWinSaldoInsuficienteRejeita(t *testing.T) {
+	// Desfazer um WIN de 25.00 com saldo atual de 10.00: a reversão não
+	// pode levar o saldo a negativo, então é recusa persistida com o código
+	// específico de reversão.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	vitoriaProcessada(t, h, "33333333-3333-4333-8333-333333333333")
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRollback
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StateRejected {
+		t.Fatalf("estado = %s, quer REJECTED", res.Transaction.State())
+	}
+	if res.Transaction.FailureCode() != "INSUFFICIENT_FUNDS_REVERSAL" {
+		t.Errorf("failureCode = %s, quer INSUFFICIENT_FUNDS_REVERSAL", res.Transaction.FailureCode())
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "10.00" {
+		t.Errorf("saldo = %s, quer 10.00 (rejeição não move)", got)
+	}
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("rejeição não pode lançar no ledger")
+	}
+	if len(h.uow.events.eventos) != 1 || h.uow.events.eventos[0].EventType() != "WagerTransactionRejected" {
+		t.Errorf("esperava o evento de recusa, veio %d eventos", len(h.uow.events.eventos))
+	}
+}
+
+func TestSubmitRollbackReferenciaRejeitadaEspera(t *testing.T) {
+	// A referência existe, mas foi rejeitada (nunca processada): a reversão
+	// espera — o provedor pode estar reenviando a aposta — e é a exaustão
+	// de tentativas do worker que encerra com REFERENCE_NOT_FOUND.
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "50.00")); err != nil {
+		t.Fatal(err)
+	}
+	aposta := mustTransactionRevertido(t, "33333333-3333-4333-8333-333333333333")
+	if err := aposta.MarkRejected("INSUFFICIENT_FUNDS", "saldo insuficiente", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.uow.txns.Insert(context.Background(), aposta); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRollback
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatalf("SubmitTransaction: %v", err)
+	}
+	if res.Transaction.State() != wager.StatePendingReference {
+		t.Fatalf("estado = %s, quer PENDING_REFERENCE", res.Transaction.State())
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "50.00" {
+		t.Errorf("saldo = %s, quer 50.00", got)
+	}
 }
 
 // ===== entradas inválidas =====
@@ -707,8 +1085,8 @@ func TestSubmitReentregaIdempotente(t *testing.T) {
 	if len(h.uow.ledger.lancamentos) != 1 {
 		t.Errorf("reentrega gravou %d lançamentos, quer 1", len(h.uow.ledger.lancamentos))
 	}
-	if len(h.uow.events.eventos) != 1 {
-		t.Errorf("reentrega publicou %d eventos, quer 1", len(h.uow.events.eventos))
+	if len(h.uow.events.eventos) != 2 {
+		t.Errorf("reentrega publicou %d eventos, quer 2", len(h.uow.events.eventos))
 	}
 }
 
@@ -743,22 +1121,176 @@ func TestSubmitReentregaComPayloadDiferenteConflita(t *testing.T) {
 func TestSubmitReentregaComCarteiraRemovidaAindaResponde(t *testing.T) {
 	// A reentrega nem consulta a carteira: responde com o registro salvo.
 	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "100.00")); err != nil {
+		t.Fatal(err)
+	}
 	svc := wagering.NewService(h.uow.txns, h)
 
-	params := betParams(novxs)
-	params.Kind = wager.KindLoss
-	params.Amount = money.Zero(money.BRL)
-
-	if _, err := svc.SubmitTransaction(context.Background(), params); err != nil {
-		t.Fatalf("LOSS sem carteira deveria processar (não move): %v", err)
+	if _, err := svc.SubmitTransaction(context.Background(), betParams(novxs)); err != nil {
+		t.Fatalf("primeira submissão: %v", err)
 	}
-	segundo, err := svc.SubmitTransaction(context.Background(), params)
+	// A carteira foi removida depois do processamento.
+	delete(h.uow.wallets.porID, "11111111-1111-4111-8111-111111111111")
+
+	segundo, err := svc.SubmitTransaction(context.Background(), betParams(novxs))
 	if err != nil {
 		t.Fatalf("reentrega: %v", err)
 	}
 	if !segundo.Replayed || segundo.Transaction.State() != wager.StateProcessed {
 		t.Errorf("esperava replay processado, veio replayed=%v estado=%s",
 			segundo.Replayed, segundo.Transaction.State())
+	}
+	if !segundo.Transaction.HasObservedBalance() {
+		t.Error("replay deveria devolver o saldo observado do registro")
+	}
+}
+
+// ===== worker de referências (retomada da pendência) =====
+
+func TestWorkerResolvePendenciaQuandoReferenciaChega(t *testing.T) {
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	// Submissão sem a referência: fica PENDING_REFERENCE.
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-33333333-3333-4333-8333-333333333333"
+	res, err := svc.SubmitTransaction(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transaction.State() != wager.StatePendingReference {
+		t.Fatalf("estado = %s, quer PENDING_REFERENCE", res.Transaction.State())
+	}
+
+	// A aposta referenciada chega e é processada depois.
+	apostaProcessada(t, h, "33333333-3333-4333-8333-333333333333")
+
+	// O worker retoma a pendência e conclui a reversão.
+	worker := wagering.NewReferenceWorker(h.uow.txns, h)
+	worker.SetNow(func() time.Time { return t0.Add(2 * time.Second) })
+
+	resolvidas, err := worker.Retomar(context.Background())
+	if err != nil {
+		t.Fatalf("Retomar: %v", err)
+	}
+	if resolvidas != 1 {
+		t.Errorf("resolvidas = %d, quer 1", resolvidas)
+	}
+
+	stored, err := h.uow.txns.FindByID(context.Background(), novxs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State() != wager.StateProcessed {
+		t.Fatalf("estado após retomada = %s, quer PROCESSED", stored.State())
+	}
+	if stored.ReferenceID() != "33333333-3333-4333-8333-333333333333" {
+		t.Errorf("referência resolvida = %q, quer tx-ref", stored.ReferenceID())
+	}
+	w, _ := h.uow.wallets.FindByID(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if got := w.Balance().String(); got != "35.00" {
+		t.Errorf("saldo = %s, quer 35.00 (10.00 + 25.00)", got)
+	}
+	if len(h.uow.ledger.lancamentos) != 1 {
+		t.Errorf("ledger = %d lançamentos, quer 1", len(h.uow.ledger.lancamentos))
+	}
+}
+
+func TestWorkerContaTentativasComBackoff(t *testing.T) {
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-que-nao-chega"
+	if _, err := svc.SubmitTransaction(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := wagering.NewReferenceWorker(h.uow.txns, h)
+	agora := t0.Add(2 * time.Second)
+	worker.SetNow(func() time.Time { return agora })
+
+	// Primeira retomada sem a referência: conta a tentativa e agenda o
+	// backoff exponencial (2s → 4s → 8s → 16s).
+	resolvidas, err := worker.Retomar(context.Background())
+	if err != nil {
+		t.Fatalf("Retomar: %v", err)
+	}
+	if resolvidas != 0 {
+		t.Errorf("referência ausente não resolve nada, veio %d", resolvidas)
+	}
+	stored, _ := h.uow.txns.FindByID(context.Background(), novxs)
+	if stored.State() != wager.StatePendingReference {
+		t.Fatalf("estado = %s, quer PENDING_REFERENCE", stored.State())
+	}
+	if stored.ReferenceAttempts() != 1 {
+		t.Errorf("tentativas = %d, quer 1", stored.ReferenceAttempts())
+	}
+	esperado := agora.Add(2 * time.Second)
+	if !stored.ReferenceNextAttempt().Equal(esperado) {
+		t.Errorf("próxima tentativa = %s, quer %s", stored.ReferenceNextAttempt(), esperado)
+	}
+}
+
+func TestWorkerEsgotaTentativasERejeita(t *testing.T) {
+	h := novoHarness()
+	if err := h.uow.wallets.Insert(context.Background(), carteiraComSaldo(t, "10.00")); err != nil {
+		t.Fatal(err)
+	}
+	svc := wagering.NewService(h.uow.txns, h)
+
+	params := betParams(novxs)
+	params.Kind = wager.KindRefund
+	params.Amount = money.MustParse("25.00", money.BRL)
+	params.ReferenceExtID = "ext-que-nao-chega"
+	if _, err := svc.SubmitTransaction(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := wagering.NewReferenceWorker(h.uow.txns, h)
+
+	// O limite é de 5 tentativas: 1 (submissão) + 4 retomadas do worker.
+	for i := 0; i < 5; i++ {
+		resolvidas, err := worker.Retomar(context.Background())
+		if err != nil {
+			t.Fatalf("Retomar %d: %v", i, err)
+		}
+		if i < 4 && resolvidas != 0 {
+			t.Fatalf("retomada %d não deveria resolver, veio %d", i, resolvidas)
+		}
+		if i == 4 && resolvidas != 1 {
+			t.Fatalf("última retomada deveria resolver (rejeitar), veio %d", resolvidas)
+		}
+	}
+
+	stored, err := h.uow.txns.FindByID(context.Background(), novxs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State() != wager.StateRejected {
+		t.Fatalf("estado final = %s, quer REJECTED", stored.State())
+	}
+	if stored.FailureCode() != "REFERENCE_NOT_FOUND" {
+		t.Errorf("failureCode = %s, quer REFERENCE_NOT_FOUND", stored.FailureCode())
+	}
+	if len(h.uow.ledger.lancamentos) != 0 {
+		t.Error("rejeição por esgotamento não pode lançar no ledger")
+	}
+	if len(h.uow.events.eventos) != 2 {
+		t.Errorf("eventos = %d, quer 2 (espera + recusa)", len(h.uow.events.eventos))
+	}
+	if h.uow.events.eventos[1].EventType() != "WagerTransactionRejected" {
+		t.Errorf("último evento = %s, quer WagerTransactionRejected", h.uow.events.eventos[1].EventType())
 	}
 }
 
@@ -798,11 +1330,11 @@ func TestGetTransactionByExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := svc.GetTransactionByExternal(context.Background(), "provider-1", "ext-tx-1")
+	got, err := svc.GetTransactionByExternal(context.Background(), "provider-1", "ext-"+novxs)
 	if err != nil {
 		t.Fatalf("GetTransactionByExternal: %v", err)
 	}
-	if got.ExternalID() != "ext-tx-1" {
+	if got.ExternalID() != "ext-"+novxs {
 		t.Errorf("externalId = %s", got.ExternalID())
 	}
 }
