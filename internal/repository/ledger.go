@@ -30,23 +30,18 @@ type LedgerRepository interface {
 	ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error)
 }
 
-// PostgresLedger é a implementação sobre o Postgres.
-type PostgresLedger struct {
+// ledgerRepository é a implementação sobre o banco.
+type ledgerRepository struct {
 	db Querier
 }
 
 // NewLedgerRepository devolve o repositório de ledger.
 func NewLedgerRepository(db Querier) LedgerRepository {
-	return &PostgresLedger{db: db}
-}
-
-// NewLedgerRepositoryWithTx creates a repository bound to the given transaction.
-func NewLedgerRepositoryWithTx(tx *sql.Tx) LedgerRepository {
-	return &PostgresLedger{db: tx}
+	return &ledgerRepository{db: db}
 }
 
 // Append grava o lançamento.
-func (r *PostgresLedger) Append(ctx context.Context, e *ledger.Entry) error {
+func (r *ledgerRepository) Append(ctx context.Context, e *ledger.Entry) error {
 	if err := validUUID("entry_id", e.ID()); err != nil {
 		return err
 	}
@@ -82,7 +77,7 @@ func (r *PostgresLedger) Append(ctx context.Context, e *ledger.Entry) error {
 }
 
 // FindByTransaction devolve o lançamento de uma transação.
-func (r *PostgresLedger) FindByTransaction(ctx context.Context, transactionID string) (*ledger.Entry, error) {
+func (r *ledgerRepository) FindByTransaction(ctx context.Context, transactionID string) (*ledger.Entry, error) {
 	if err := validUUID("transaction_id", transactionID); err != nil {
 		return nil, err
 	}
@@ -99,7 +94,7 @@ func (r *PostgresLedger) FindByTransaction(ctx context.Context, transactionID st
 }
 
 // ListByWallet devolve o extrato, do mais novo para o mais antigo.
-func (r *PostgresLedger) ListByWallet(ctx context.Context, walletID string, limite int) ([]*ledger.Entry, error) {
+func (r *ledgerRepository) ListByWallet(ctx context.Context, walletID string, limite int) ([]*ledger.Entry, error) {
 	if err := validUUID("wallet_id", walletID); err != nil {
 		return nil, err
 	}
@@ -130,7 +125,7 @@ func (r *PostgresLedger) ListByWallet(ctx context.Context, walletID string, limi
 }
 
 // ListByWalletAll devolve todos os lançamentos da carteira, sem paginação.
-func (r *PostgresLedger) ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error) {
+func (r *ledgerRepository) ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error) {
 	if err := validUUID("wallet_id", walletID); err != nil {
 		return nil, err
 	}
