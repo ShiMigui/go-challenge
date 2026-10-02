@@ -24,6 +24,10 @@ var (
 	ErrInvalidWalletID = errors.New("wallet_id obrigatorio")
 	// ErrClosedTransition é devolvido quando se altera uma carteira inexistente.
 	ErrClosedTransition = errors.New("carteira removida nao aceita operacao")
+	// ErrWalletNotFound é devolvido quando a carteira não existe.
+	ErrWalletNotFound = errors.New("carteira nao encontrada")
+	// ErrDuplicateWallet é devolvido quando já existe carteira para o par (player, currency).
+	ErrDuplicateWallet = errors.New("carteira duplicada para jogador e moeda")
 )
 
 // initialVersion é a versão de uma carteira recién-criada.
