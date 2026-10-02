@@ -72,23 +72,18 @@ func (d *Duplicate) Error() string {
 // Unwrap expõe a causa para errors.Is.
 func (d *Duplicate) Unwrap() error { return d.Err }
 
-// PostgresWagerTransaction é a implementação sobre o Postgres.
-type PostgresWagerTransaction struct {
+// wagerRepository é a implementação sobre o banco.
+type wagerRepository struct {
 	db Querier
 }
 
 // NewWagerTransactionRepository devolve o repositório de transações.
 func NewWagerTransactionRepository(db Querier) WagerTransactionRepository {
-	return &PostgresWagerTransaction{db: db}
-}
-
-// NewWagerTransactionRepositoryWithTx creates a repository bound to the given transaction.
-func NewWagerTransactionRepositoryWithTx(tx *sql.Tx) WagerTransactionRepository {
-	return &PostgresWagerTransaction{db: tx}
+	return &wagerRepository{db: db}
 }
 
 // Insert grava a transação ou devolve a que já existia.
-func (r *PostgresWagerTransaction) Insert(ctx context.Context, tx *wager.Transaction) error {
+func (r *wagerRepository) Insert(ctx context.Context, tx *wager.Transaction) error {
 	if err := validUUID("transaction_id", tx.ID()); err != nil {
 		return err
 	}
@@ -135,7 +130,7 @@ func (r *PostgresWagerTransaction) Insert(ctx context.Context, tx *wager.Transac
 }
 
 // findByIdentity procura a transação que colidiu com a inserção.
-func (r *PostgresWagerTransaction) findByIdentity(ctx context.Context, tx *wager.Transaction) (*wager.Transaction, error) {
+func (r *wagerRepository) findByIdentity(ctx context.Context, tx *wager.Transaction) (*wager.Transaction, error) {
 	if tx.ProviderID() != "" && tx.ExternalID() != "" {
 		if achada, err := r.FindByExternalID(ctx, tx.ProviderID(), tx.ExternalID()); err == nil {
 			return achada, nil
@@ -163,7 +158,7 @@ func (r *PostgresWagerTransaction) findByIdentity(ctx context.Context, tx *wager
 }
 
 // FindByID devolve a transação pela identidade interna.
-func (r *PostgresWagerTransaction) FindByID(ctx context.Context, id string) (*wager.Transaction, error) {
+func (r *wagerRepository) FindByID(ctx context.Context, id string) (*wager.Transaction, error) {
 	if err := validUUID("transaction_id", id); err != nil {
 		return nil, err
 	}
@@ -172,7 +167,7 @@ func (r *PostgresWagerTransaction) FindByID(ctx context.Context, id string) (*wa
 }
 
 // FindByExternalID devolve a transação pelo par (provider, id externo).
-func (r *PostgresWagerTransaction) FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error) {
+func (r *wagerRepository) FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error) {
 	q := `SELECT ` + wagerColumns + `
 		FROM wager_transactions
 		WHERE provider_id = $1 AND external_transaction_id = $2`
@@ -180,7 +175,7 @@ func (r *PostgresWagerTransaction) FindByExternalID(ctx context.Context, provide
 }
 
 // FindByIdempotencyKey devolve a transação pela chave de deduplicação.
-func (r *PostgresWagerTransaction) FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error) {
+func (r *wagerRepository) FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error) {
 	q := `SELECT ` + wagerColumns + `
 		FROM wager_transactions
 		WHERE provider_id = $1 AND idempotency_key = $2`
@@ -190,7 +185,7 @@ func (r *PostgresWagerTransaction) FindByIdempotencyKey(ctx context.Context, pro
 // CheckIdempotency verifica se uma chave de idempotência já foi usada
 // com o mesmo hash de payload. Se o hash for diferente, retorna
 // ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
-func (r *PostgresWagerTransaction) CheckIdempotency(ctx context.Context, key, payloadHash string) error {
+func (r *wagerRepository) CheckIdempotency(ctx context.Context, key, payloadHash string) error {
 	const q = `SELECT payload_hash FROM wager_transactions WHERE idempotency_key = $1`
 	var storedHash string
 	err := r.db.QueryRowContext(ctx, q, key).Scan(&storedHash)
@@ -208,7 +203,7 @@ func (r *PostgresWagerTransaction) CheckIdempotency(ctx context.Context, key, pa
 }
 
 // UpdateState grava a transição de estado.
-func (r *PostgresWagerTransaction) UpdateState(ctx context.Context, tx *wager.Transaction) error {
+func (r *wagerRepository) UpdateState(ctx context.Context, tx *wager.Transaction) error {
 	if err := validUUID("transaction_id", tx.ID()); err != nil {
 		return err
 	}
@@ -264,7 +259,7 @@ func (r *PostgresWagerTransaction) UpdateState(ctx context.Context, tx *wager.Tr
 }
 
 // ResolveReference associa a referência interna à transação pendente.
-func (r *PostgresWagerTransaction) ResolveReference(ctx context.Context, tx *wager.Transaction) error {
+func (r *wagerRepository) ResolveReference(ctx context.Context, tx *wager.Transaction) error {
 	if err := validUUID("transaction_id", tx.ID()); err != nil {
 		return err
 	}
@@ -292,7 +287,7 @@ func (r *PostgresWagerTransaction) ResolveReference(ctx context.Context, tx *wag
 }
 
 // ListPendingReferences devolve as esperas vencidas, mais antigas primeiro.
-func (r *PostgresWagerTransaction) ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error) {
+func (r *wagerRepository) ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error) {
 	if limite <= 0 {
 		limite = 100
 	}
@@ -320,7 +315,7 @@ func (r *PostgresWagerTransaction) ListPendingReferences(ctx context.Context, ag
 	return saida, rows.Err()
 }
 
-func (r *PostgresWagerTransaction) scanOne(ctx context.Context, q string, args ...any) (*wager.Transaction, error) {
+func (r *wagerRepository) scanOne(ctx context.Context, q string, args ...any) (*wager.Transaction, error) {
 	row := r.db.QueryRowContext(ctx, q, args...)
 	tx, err := scanWager(row)
 	if err != nil {
