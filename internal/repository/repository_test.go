@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
 	"github.com/shimigui/go-challenge/internal/domain/wallet"
@@ -225,7 +226,7 @@ func TestWalletIDInvalidoBarradoAntesDoBanco(t *testing.T) {
 	repo := NewWalletRepository(db)
 
 	for _, id := range []string{"", "abc", "11111111-1111-1111-1111-11111111111", "11111111_1111_1111_1111_111111111111"} {
-		if _, err := repo.FindByID(context.Background(), id); !errors.Is(err, ErrInvalidID) {
+		if _, err := repo.FindByID(context.Background(), id); !errors.Is(err, identifier.ErrInvalidID) {
 			t.Errorf("id %q: esperava ErrInvalidID, veio %v", id, err)
 		}
 	}

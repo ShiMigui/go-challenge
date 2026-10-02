@@ -10,18 +10,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
 var (
 	// ErrInsufficientFunds é devolvido quando o débito excede o saldo.
 	ErrInsufficientFunds = errors.New("saldo insuficiente")
-	// ErrCurrencyMismatch é devolvido quando a movimentação é de outra moeda.
-	ErrCurrencyMismatch = errors.New("moeda da movimentacao difere da carteira")
-	// ErrInvalidPlayerID é devolvido quando o jogador não é identificável.
-	ErrInvalidPlayerID = errors.New("player_id obrigatorio")
-	// ErrInvalidWalletID é devolvido quando a carteira não tem identidade.
-	ErrInvalidWalletID = errors.New("wallet_id obrigatorio")
 	// ErrClosedTransition é devolvido quando se altera uma carteira inexistente.
 	ErrClosedTransition = errors.New("carteira removida nao aceita operacao")
 	// ErrWalletNotFound é devolvido quando a carteira não existe.
@@ -63,10 +58,10 @@ type Params struct {
 // A moeda da carteira vem do Opening.Currency().
 func New(p Params) (*Wallet, error) {
 	if p.ID == "" {
-		return nil, ErrInvalidWalletID
+		return nil, identifier.ErrInvalidWalletID
 	}
 	if p.PlayerID == "" {
-		return nil, ErrInvalidPlayerID
+		return nil, identifier.ErrInvalidPlayerID
 	}
 	if p.Opening.IsNegative() {
 		return nil, fmt.Errorf("%w: abertura %s", money.ErrNegativeAmount, p.Opening)
@@ -182,7 +177,7 @@ func (w *Wallet) validateMutation(amount money.Money, op string) error {
 		return ErrClosedTransition
 	}
 	if amount.Currency() != w.balance.Currency() {
-		return fmt.Errorf("%w: %s vs %s", ErrCurrencyMismatch, amount.Currency(), w.balance.Currency())
+		return fmt.Errorf("%w: %s vs %s", money.ErrCurrencyMismatch, amount.Currency(), w.balance.Currency())
 	}
 	if amount.IsNegative() {
 		return fmt.Errorf("%w: %s %s", money.ErrNegativeAmount, op, amount)

@@ -21,8 +21,6 @@ var (
 	ErrNotFound = errors.New("registro nao encontrado")
 	// ErrOptimisticLock é devolvido quando a versão mudou desde a leitura.
 	ErrOptimisticLock = errors.New("concorrencia otimista: versao desatualizada")
-	// ErrInvalidID é devolvido quando um identificador não é UUID válido.
-	ErrInvalidID = errors.New("identificador nao e um UUID valido")
 	// ErrMessageTampered é devolvido quando a reentrega traz outro corpo.
 	ErrMessageTampered = errors.New("mensagem reentregue com hash diferente")
 	// ErrAlreadyCompleted é devolvido ao completar mensagem já concluída.
@@ -46,7 +44,7 @@ type Querier interface {
 // infraestrutura em vez de entrada ruim.
 func validUUID(field, value string) error {
 	if !identifier.IsValid(value) {
-		return fmt.Errorf("%w: %s = %q", ErrInvalidID, field, value)
+		return fmt.Errorf("%w: %s = %q", identifier.ErrInvalidID, field, value)
 	}
 	return nil
 }

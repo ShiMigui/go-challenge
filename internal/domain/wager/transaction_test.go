@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
@@ -156,14 +157,14 @@ func TestValidacoesOperacaoExterna(t *testing.T) {
 		mutar func(*ExternalParams)
 		want  error
 	}{
-		{"sem id", func(p *ExternalParams) { p.ID = "" }, ErrInvalidTransactionID},
+		{"sem id", func(p *ExternalParams) { p.ID = "" }, identifier.ErrInvalidTransactionID},
 		{"kind desconhecido", func(p *ExternalParams) { p.Kind = "CASHBACK" }, ErrInvalidKind},
 		{"sem provider", func(p *ExternalParams) { p.ProviderID = "" }, ErrInvalidProviderID},
 		{"sem id externo", func(p *ExternalParams) { p.ExternalID = "" }, ErrInvalidExternalID},
 		{"sem chave", func(p *ExternalParams) { p.IdempotencyKey = "" }, ErrInvalidIdempotencyKey},
 		{"sem hash", func(p *ExternalParams) { p.PayloadHash = "" }, ErrInvalidPayloadHash},
-		{"sem player", func(p *ExternalParams) { p.PlayerID = "" }, ErrInvalidPlayerID},
-		{"sem wallet", func(p *ExternalParams) { p.WalletID = "" }, ErrInvalidWalletID},
+		{"sem player", func(p *ExternalParams) { p.PlayerID = "" }, identifier.ErrInvalidPlayerID},
+		{"sem wallet", func(p *ExternalParams) { p.WalletID = "" }, identifier.ErrInvalidWalletID},
 		{"BET com valor zero", func(p *ExternalParams) { p.Amount = money.Zero(money.BRL) }, ErrInvalidAmountForKind},
 		{"BET com valor negativo", func(p *ExternalParams) {
 			p.Amount = money.MustNew(-1000, money.BRL)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
@@ -19,10 +20,6 @@ var (
 	ErrNonPositiveAmount = errors.New("lancamento exige valor positivo")
 	// ErrBalanceArithmetic é devolvido quando saldo posterior não bate com a direção.
 	ErrBalanceArithmetic = errors.New("saldo posterior inconsistente com a direcao")
-	// ErrInvalidWalletID é devolvido sem identidade de carteira.
-	ErrInvalidWalletID = errors.New("wallet_id obrigatorio")
-	// ErrInvalidTransactionID é devolvido sem identidade de transação.
-	ErrInvalidTransactionID = errors.New("transaction_id obrigatorio")
 )
 
 // Direction é o sentido do lançamento.
@@ -74,10 +71,10 @@ type Params struct {
 // garante.
 func New(p Params) (*Entry, error) {
 	if p.WalletID == "" {
-		return nil, ErrInvalidWalletID
+		return nil, identifier.ErrInvalidWalletID
 	}
 	if p.TransactionID == "" {
-		return nil, ErrInvalidTransactionID
+		return nil, identifier.ErrInvalidTransactionID
 	}
 	if !p.Direction.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidDirection, string(p.Direction))

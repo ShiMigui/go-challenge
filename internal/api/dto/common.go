@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
@@ -149,11 +150,13 @@ func MapDomainError(err error) *DomainError {
 		return ErrInvalidInput(err)
 	case errors.Is(err, wager.ErrExternalNotAllowed):
 		return ErrInvalidInput(err)
-	case errors.Is(err, wallet.ErrInvalidPlayerID):
+	case errors.Is(err, identifier.ErrInvalidPlayerID):
 		return ErrInvalidInput(err)
-	case errors.Is(err, wallet.ErrInvalidWalletID):
+	case errors.Is(err, identifier.ErrInvalidWalletID):
 		return ErrInvalidInput(err)
-	case errors.Is(err, wager.ErrInvalidTransactionID):
+	case errors.Is(err, identifier.ErrInvalidTransactionID):
+		return ErrInvalidInput(err)
+	case errors.Is(err, identifier.ErrInvalidID):
 		return ErrInvalidInput(err)
 	case errors.Is(err, wager.ErrInvalidProviderID):
 		return ErrInvalidInput(err)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
@@ -74,14 +75,8 @@ var (
 	ErrReferenceNotProcessed = errors.New("referencia nao esta processada")
 	// ErrIdempotencyConflict é devolvido quando a mesma chave traz outro payload.
 	ErrIdempotencyConflict = errors.New("chave de idempotencia reaproveitada com outro payload")
-	// ErrInvalidPlayerID é devolvido sem jogador.
-	ErrInvalidPlayerID = errors.New("player_id obrigatorio")
 	// ErrTransactionNotFound é devolvido quando a transação não existe.
 	ErrTransactionNotFound = errors.New("transacao nao encontrada")
-	// ErrInvalidWalletID é devolvido sem carteira.
-	ErrInvalidWalletID = errors.New("wallet_id obrigatorio")
-	// ErrInvalidTransactionID é devolvido sem identidade de transação.
-	ErrInvalidTransactionID = errors.New("transaction_id obrigatorio")
 	// ErrInvalidProviderID é devolvido sem provedor.
 	ErrInvalidProviderID = errors.New("provider_id obrigatorio")
 	// ErrInvalidExternalID é devolvido sem id externo.
@@ -192,13 +187,13 @@ type OpeningParams struct {
 // rodada, jogo nem referência, e não pode ser criada por uma entrada externa.
 func NewOpening(p OpeningParams) (*Transaction, error) {
 	if p.ID == "" {
-		return nil, ErrInvalidTransactionID
+		return nil, identifier.ErrInvalidTransactionID
 	}
 	if p.PlayerID == "" {
-		return nil, ErrInvalidPlayerID
+		return nil, identifier.ErrInvalidPlayerID
 	}
 	if p.WalletID == "" {
-		return nil, ErrInvalidWalletID
+		return nil, identifier.ErrInvalidWalletID
 	}
 	if p.Amount.IsNegative() {
 		return nil, fmt.Errorf("%w: abertura %s", money.ErrNegativeAmount, p.Amount)
@@ -236,7 +231,7 @@ type ExternalParams struct {
 // NewExternal cria uma operação de um provedor.
 func NewExternal(p ExternalParams) (*Transaction, error) {
 	if p.ID == "" {
-		return nil, ErrInvalidTransactionID
+		return nil, identifier.ErrInvalidTransactionID
 	}
 	if !p.Kind.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidKind, string(p.Kind))
@@ -259,10 +254,10 @@ func NewExternal(p ExternalParams) (*Transaction, error) {
 		return nil, ErrInvalidPayloadHash
 	}
 	if p.PlayerID == "" {
-		return nil, ErrInvalidPlayerID
+		return nil, identifier.ErrInvalidPlayerID
 	}
 	if p.WalletID == "" {
-		return nil, ErrInvalidWalletID
+		return nil, identifier.ErrInvalidWalletID
 	}
 	// A moeda da transação vem do Amount
 	if err := validateAmountForKind(p.Kind, p.Amount); err != nil {

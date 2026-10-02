@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
@@ -78,7 +79,7 @@ func TestLedgerAppendRecusaIDInvalido(t *testing.T) {
 		Direction: ledger.Credit, Amount: brl("1.00"),
 		BalanceBefore: brl("0.00"), BalanceAfter: brl("1.00"), Now: t0,
 	})
-	if err := repo.Append(context.Background(), e); !errors.Is(err, ErrInvalidID) {
+	if err := repo.Append(context.Background(), e); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("esperava ErrInvalidID, veio %v", err)
 	}
 }
@@ -175,7 +176,7 @@ func TestWalletInsertRecusaIDInvalido(t *testing.T) {
 		ID: "invalido", PlayerID: playerID,
 		Opening: brl("0.00"), Now: t0,
 	})
-	if err := repo.Insert(context.Background(), w); !errors.Is(err, ErrInvalidID) {
+	if err := repo.Insert(context.Background(), w); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("esperava ErrInvalidID, veio %v", err)
 	}
 }
@@ -271,10 +272,10 @@ func TestNewEventRecusaIDInvalido(t *testing.T) {
 	db := abrirFalso(t, "o10", func(c consulta) resposta { return resposta{afetadas: 1} })
 	_ = NewOutboxRepository(db)
 
-	if _, err := NewEvent("nao-e-uuid", "wallet", walletID, "Evento", 1, []byte(`{}`), t0); !errors.Is(err, ErrInvalidID) {
+	if _, err := NewEvent("nao-e-uuid", "wallet", walletID, "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("event_id inválido deveria falhar")
 	}
-	if _, err := NewEvent(eventID, "wallet", "nao-e-uuid", "Evento", 1, []byte(`{}`), t0); !errors.Is(err, ErrInvalidID) {
+	if _, err := NewEvent(eventID, "wallet", "nao-e-uuid", "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("aggregate_id inválido deveria falhar")
 	}
 }

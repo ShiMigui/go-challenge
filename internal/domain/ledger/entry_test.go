@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
@@ -121,13 +122,13 @@ func TestValidacoes(t *testing.T) {
 
 	p := base()
 	p.WalletID = ""
-	if _, err := New(p); !errors.Is(err, ErrInvalidWalletID) {
+	if _, err := New(p); !errors.Is(err, identifier.ErrInvalidWalletID) {
 		t.Errorf("esperava ErrInvalidWalletID, veio %v", err)
 	}
 
 	p = base()
 	p.TransactionID = ""
-	if _, err := New(p); !errors.Is(err, ErrInvalidTransactionID) {
+	if _, err := New(p); !errors.Is(err, identifier.ErrInvalidTransactionID) {
 		t.Errorf("esperava ErrInvalidTransactionID, veio %v", err)
 	}
 

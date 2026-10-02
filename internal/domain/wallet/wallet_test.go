@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 )
 
@@ -53,8 +54,8 @@ func TestNewValidacoes(t *testing.T) {
 		p    Params
 		want error
 	}{
-		{"sem id", Params{PlayerID: "p", Opening: money.Zero(money.BRL), Now: now}, ErrInvalidWalletID},
-		{"sem player", Params{ID: "w", Opening: money.Zero(money.BRL), Now: now}, ErrInvalidPlayerID},
+		{"sem id", Params{PlayerID: "p", Opening: money.Zero(money.BRL), Now: now}, identifier.ErrInvalidWalletID},
+		{"sem player", Params{ID: "w", Opening: money.Zero(money.BRL), Now: now}, identifier.ErrInvalidPlayerID},
 		{"abertura negativa", Params{ID: "w", PlayerID: "p", Opening: money.MustNew(-100, money.BRL), Now: now}, money.ErrNegativeAmount},
 	}
 	for _, c := range cases {
@@ -128,10 +129,10 @@ func TestOperacoesRejeitamMoedaDiferente(t *testing.T) {
 	now := time.Now()
 	usd := money.MustParse("10.00", money.USD)
 
-	if err := w.Credit(usd, now); !errors.Is(err, ErrCurrencyMismatch) {
+	if err := w.Credit(usd, now); !errors.Is(err, money.ErrCurrencyMismatch) {
 		t.Errorf("crédito em USD: esperava ErrCurrencyMismatch, veio %v", err)
 	}
-	if err := w.Debit(usd, now); !errors.Is(err, ErrCurrencyMismatch) {
+	if err := w.Debit(usd, now); !errors.Is(err, money.ErrCurrencyMismatch) {
 		t.Errorf("débito em USD: esperava ErrCurrencyMismatch, veio %v", err)
 	}
 	if w.Version() != 1 {
