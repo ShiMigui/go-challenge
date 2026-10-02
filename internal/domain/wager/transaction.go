@@ -76,6 +76,8 @@ var (
 	ErrIdempotencyConflict = errors.New("chave de idempotencia reaproveitada com outro payload")
 	// ErrInvalidPlayerID é devolvido sem jogador.
 	ErrInvalidPlayerID = errors.New("player_id obrigatorio")
+	// ErrTransactionNotFound é devolvido quando a transação não existe.
+	ErrTransactionNotFound = errors.New("transacao nao encontrada")
 	// ErrInvalidWalletID é devolvido sem carteira.
 	ErrInvalidWalletID = errors.New("wallet_id obrigatorio")
 	// ErrInvalidTransactionID é devolvido sem identidade de transação.
