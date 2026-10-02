@@ -14,6 +14,7 @@ import (
 	"go.uber.org/fx"
 
 	applicationfx "github.com/shimigui/go-challenge/internal/application/fxapp"
+	"github.com/shimigui/go-challenge/internal/application/wagering"
 	"github.com/shimigui/go-challenge/internal/config"
 	"github.com/shimigui/go-challenge/internal/infrastructure/health"
 	"github.com/shimigui/go-challenge/internal/infrastructure/persistence"
@@ -40,8 +41,9 @@ func Options() []fx.Option {
 	}
 }
 
-// lifecycle liga o servidor HTTP ao ciclo de vida do Fx.
-func lifecycle(lc fx.Lifecycle, cfg config.Config, handler http.Handler) {
+// lifecycle liga o servidor HTTP e o worker de referências ao ciclo de
+// vida do Fx: sobem junto com o app, descem com shutdown gracioso na parada.
+func lifecycle(lc fx.Lifecycle, cfg config.Config, handler http.Handler, worker *wagering.ReferenceWorker) {
 	srv := &http.Server{
 		Addr:              ":" + cfg.API.Port,
 		Handler:           handler,
@@ -55,6 +57,17 @@ func lifecycle(lc fx.Lifecycle, cfg config.Config, handler http.Handler) {
 					log.Printf("http: servidor encerrou com erro: %v", err)
 				}
 			}()
+
+			// O worker roda até o shutdown: o contexto derivado é cancelado
+			// no OnStop, encerrando a varredura de pendências.
+			wctx, cancel := context.WithCancel(context.Background())
+			go worker.Loop(wctx)
+			lc.Append(fx.Hook{
+				OnStop: func(ctx context.Context) error {
+					cancel()
+					return nil
+				},
+			})
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {

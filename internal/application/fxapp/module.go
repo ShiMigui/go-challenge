@@ -19,5 +19,8 @@ var Module = fx.Module("application",
 			wagering.NewService,
 			fx.As(new(wagering.Service)),
 		),
+		// O worker de referências retoma as operações PENDING_REFERENCE.
+		// Fica no grafo para o bootstrap ligá-lo ao ciclo de vida.
+		wagering.NewReferenceWorker,
 	),
 )
