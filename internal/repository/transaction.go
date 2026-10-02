@@ -5,32 +5,29 @@ import (
 	"database/sql"
 )
 
-// TransactionManager defines the interface for running code in a transaction.
-type TransactionManager interface {
-	WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error
-}
-
-// TransactionRepository dá acesso ao banco transacional.
+// TransactionManager roda código dentro de uma transação do banco.
 //
-// Existe separada do Querier porque BeginTx exige *sql.DB: um *sql.Tx
+// Existe separado do Querier porque BeginTx exige *sql.DB: um *sql.Tx
 // não abre transação aninhada. Um repositório com Querier aceita os dois,
 // mas o ponto de entrada da transação não.
-type TransactionRepository interface {
-	WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error
+type TransactionManager interface {
+	// InTransaction roda fn em uma transação, confirmando se ela voltar
+	// sem erro e desfazendo em caso contrário.
+	InTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error
 }
 
-// PostgresTransaction é a implementação sobre o Postgres.
-type PostgresTransaction struct {
+// transactionManager é a implementação sobre o banco.
+type transactionManager struct {
 	db *sql.DB
 }
 
-// NewTransactionRepository devolve o gerenciador de transações.
-func NewTransactionRepository(db *sql.DB) *PostgresTransaction {
-	return &PostgresTransaction{db: db}
+// NewTransactionManager devolve o gerenciador de transações.
+func NewTransactionManager(db *sql.DB) TransactionManager {
+	return &transactionManager{db: db}
 }
 
-// WithTx roda fn em uma transação.
-func (r *PostgresTransaction) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+// InTransaction roda fn em uma transação.
+func (r *transactionManager) InTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
