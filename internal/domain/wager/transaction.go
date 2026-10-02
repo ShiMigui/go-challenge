@@ -165,6 +165,12 @@ type Transaction struct {
 	referenceAttempts    int
 	referenceNextAttempt time.Time
 
+	// observedBalance é o saldo da carteira no instante em que a operação
+	// foi concluída, na moeda da transação. O replay devolve este valor,
+	// não o saldo atual: é o que o provedor observou no processamento.
+	observedBalance    money.Money
+	hasObservedBalance bool
+
 	createdAt    time.Time
 	updatedAt    time.Time
 	processedAt  time.Time
@@ -369,6 +375,31 @@ func (t *Transaction) ReferenceAttempts() int { return t.referenceAttempts }
 
 // ReferenceNextAttempt devolve o instante da próxima tentativa.
 func (t *Transaction) ReferenceNextAttempt() time.Time { return t.referenceNextAttempt }
+
+// ObservedBalance devolve o saldo observado ao concluir a operação.
+//
+// Sem valor até que a operação saia de PENDING/PENDING_REFERENCE: quem
+// responde ao provedor usa HasObservedBalance para saber se o campo existe.
+func (t *Transaction) ObservedBalance() money.Money { return t.observedBalance }
+
+// HasObservedBalance informa se o saldo observado já foi registrado.
+func (t *Transaction) HasObservedBalance() bool { return t.hasObservedBalance }
+
+// SetObservedBalance registra o saldo da carteira no instante da conclusão.
+//
+// O saldo observado é um resultado, não uma entrada: só pode ser anotado
+// em operação ainda não terminal e na mesma moeda da transação.
+func (t *Transaction) SetObservedBalance(balance money.Money) error {
+	if t.state.IsTerminal() {
+		return fmt.Errorf("%w: %s não aceita saldo observado", ErrTerminalTransition, t.state)
+	}
+	if balance.Currency() != t.Currency() {
+		return fmt.Errorf("%w: saldo %s vs moeda %s", money.ErrCurrencyMismatch, balance, t.Currency())
+	}
+	t.observedBalance = balance
+	t.hasObservedBalance = true
+	return nil
+}
 
 // CreatedAt devolve o instante de criação.
 func (t *Transaction) CreatedAt() time.Time { return t.createdAt }
@@ -598,6 +629,7 @@ func Rehydrate(
 	roundID, gameID, providerID, externalID, idempotency, payloadHash string,
 	referenceExtID, referenceID, failureCode, failureMessage string,
 	referenceAttempts int, referenceNextAttempt time.Time,
+	observedBalance money.Money, hasObservedBalance bool,
 	createdAt, updatedAt, processedAt time.Time, hasProcessedAt bool,
 ) *Transaction {
 	return &Transaction{
@@ -611,6 +643,8 @@ func Rehydrate(
 		failureCode: failureCode, failureMessage: failureMessage,
 		referenceAttempts:    referenceAttempts,
 		referenceNextAttempt: referenceNextAttempt,
+		observedBalance:      observedBalance,
+		hasObservedBalance:   hasObservedBalance,
 		createdAt:            createdAt,
 		updatedAt:            updatedAt,
 		processedAt:          processedAt,

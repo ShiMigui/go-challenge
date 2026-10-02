@@ -38,7 +38,16 @@ func (r *walletRepository) Insert(ctx context.Context, w *wallet.Wallet) error {
 	`
 	_, err := r.db.ExecContext(ctx, q,
 		w.ID(), w.PlayerID(), string(w.Currency()), w.Balance().Amount())
-	return err
+	if err != nil {
+		// Um par (player, moeda) único por carteira: a segunda abertura na
+		// mesma moeda é conflito de negócio do desafio, não falha interna.
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: player %s na moeda %s",
+				wallet.ErrDuplicateWallet, w.PlayerID(), w.Currency())
+		}
+		return err
+	}
+	return nil
 }
 
 // UpdateBalance grava o saldo novo se a versão lida ainda for a atual.

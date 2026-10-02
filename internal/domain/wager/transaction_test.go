@@ -600,6 +600,7 @@ func TestRehydrateNaoRevalida(t *testing.T) {
 		"round-9", "game-9", "prov-9", "ext-9", "prov-9:ext-9", "hash-9",
 		"ext-0", "tx-0", "", "",
 		3, agora,
+		money.Zero(money.BRL), false,
 		agora, agora, agora, true,
 	)
 	if tx.ID() != "tx-9" || tx.Kind() != KindRefund || tx.State() != StateProcessed {

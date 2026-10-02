@@ -15,7 +15,7 @@ const wagerColumns = `id, kind, provider_id, external_transaction_id,
 	idempotency_key, payload_hash, player_id, wallet_id, round_id, game_id,
 	currency, amount, reference_external_transaction_id, reference_transaction_id,
 	state, failure_code, failure_message, reference_attempts,
-	reference_next_attempt_at, created_at, updated_at, processed_at`
+	reference_next_attempt_at, observed_balance, created_at, updated_at, processed_at`
 
 // wagerRepository é a implementação sobre o banco.
 type wagerRepository struct {
@@ -141,8 +141,9 @@ func (r *wagerRepository) UpdateState(ctx context.Context, tx *wager.Transaction
 			failure_message = $3,
 			processed_at = $4,
 			reference_next_attempt_at = $5,
-			updated_at = $6
-		WHERE id = $7
+			observed_balance = $6,
+			updated_at = $7
+		WHERE id = $8
 			AND state IN ('PENDING', 'PENDING_REFERENCE')
 	`
 	var processedAt any
@@ -153,12 +154,24 @@ func (r *wagerRepository) UpdateState(ctx context.Context, tx *wager.Transaction
 	if !tx.ReferenceNextAttempt().IsZero() {
 		nextAttempt = tx.ReferenceNextAttempt()
 	}
+	var observed any
+	if tx.HasObservedBalance() {
+		observed = tx.ObservedBalance().Amount()
+	}
 	res, err := r.db.ExecContext(ctx, q,
 		string(tx.State()), nullString(tx.FailureCode()),
-		nullString(tx.FailureMessage()), processedAt, nextAttempt,
+		nullString(tx.FailureMessage()), processedAt, nextAttempt, observed,
 		tx.UpdatedAt(), tx.ID(),
 	)
 	if err != nil {
+		// A única violação de unicidade possível aqui é a reversão da
+		// mesma referência pelo mesmo tipo já PROCESSED. É conflito de
+		// negócio, não falha interna: o provedor tentou reverter duas
+		// vezes e a segunda resposta é um Duplicate.
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: reversao duplicada de %s por %s",
+				wager.ErrDuplicate, tx.ReferenceID(), tx.Kind())
+		}
 		return err
 	}
 	afetadas, err := res.RowsAffected()
@@ -194,7 +207,7 @@ func (r *wagerRepository) ResolveReference(ctx context.Context, tx *wager.Transa
 	const q = `
 		UPDATE wager_transactions
 		SET reference_transaction_id = $1, updated_at = $2
-		WHERE id = $3 AND state = 'PENDING_REFERENCE'
+		WHERE id = $3 AND state IN ('PENDING', 'PENDING_REFERENCE')
 	`
 	res, err := r.db.ExecContext(ctx, q, tx.ReferenceID(), tx.UpdatedAt(), tx.ID())
 	if err != nil {
@@ -205,7 +218,7 @@ func (r *wagerRepository) ResolveReference(ctx context.Context, tx *wager.Transa
 		return err
 	}
 	if afetadas == 0 {
-		return fmt.Errorf("%w: transaction %s nao esta em PENDING_REFERENCE",
+		return fmt.Errorf("%w: transaction %s nao esta em PENDING ou PENDING_REFERENCE",
 			wager.ErrInvalidStateTransition, tx.ID())
 	}
 	return nil
@@ -271,6 +284,7 @@ func scanWager(s scanner) (*wager.Transaction, error) {
 		failureMessage            sql.NullString
 		referenceAttempts         int
 		referenceNext             sql.NullTime
+		observedBalance           sql.NullInt64
 		createdAt, updatedAt      time.Time
 		processedAt               sql.NullTime
 	)
@@ -278,7 +292,8 @@ func scanWager(s scanner) (*wager.Transaction, error) {
 		&id, &kind, &providerID, &externalID, &idempotency, &payloadHash,
 		&playerID, &walletID, &roundID, &gameID, &currency, &amount,
 		&referenceExtID, &referenceID, &state, &failureCode, &failureMessage,
-		&referenceAttempts, &referenceNext, &createdAt, &updatedAt, &processedAt,
+		&referenceAttempts, &referenceNext, &observedBalance,
+		&createdAt, &updatedAt, &processedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -286,6 +301,13 @@ func scanWager(s scanner) (*wager.Transaction, error) {
 	valor, err := money.New(amount, money.Currency(currency))
 	if err != nil {
 		return nil, fmt.Errorf("transaction %s: %w", id, err)
+	}
+	observado := money.Money{}
+	hasObservado := observedBalance.Valid
+	if hasObservado {
+		if observado, err = money.New(observedBalance.Int64, money.Currency(currency)); err != nil {
+			return nil, fmt.Errorf("transaction %s: saldo observado: %w", id, err)
+		}
 	}
 	return wager.Rehydrate(
 		id, wager.Kind(kind), wager.State(state),
@@ -296,6 +318,7 @@ func scanWager(s scanner) (*wager.Transaction, error) {
 		stringFromNull(referenceExtID), stringFromNull(referenceID),
 		stringFromNull(failureCode), stringFromNull(failureMessage),
 		referenceAttempts, timeOrZero(referenceNext),
+		observado, hasObservado,
 		createdAt, updatedAt, timeOrZero(processedAt), processedAt.Valid,
 	), nil
 }

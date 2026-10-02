@@ -71,7 +71,7 @@ func linhaWager(id, kind, state string, amount int64) []driver.Value {
 		"BRL", amount, nil, nil, // moeda, valor, refs
 		state, nil, nil, // estado e falha
 		0, nil, // tentativas e próxima tentativa
-		t0, t0, nil, // criados, atualizado, processado
+		nil, t0, t0, nil, // saldo observado, criados, atualizado, processado
 	}
 }
 
@@ -80,7 +80,8 @@ var colunasWager = []string{
 	"payload_hash", "player_id", "wallet_id", "round_id", "game_id", "currency",
 	"amount", "reference_external_transaction_id", "reference_transaction_id",
 	"state", "failure_code", "failure_message", "reference_attempts",
-	"reference_next_attempt_at", "created_at", "updated_at", "processed_at",
+	"reference_next_attempt_at", "observed_balance", "created_at", "updated_at",
+	"processed_at",
 }
 
 func TestWalletFindPorID(t *testing.T) {
@@ -393,9 +394,11 @@ func TestWagerUpdateStateTerminal(t *testing.T) {
 
 func TestWagerResolveReference(t *testing.T) {
 	db := abrirFalso(t, "t7", func(c consulta) resposta {
-		// Só a transição a partir de não terminal é aceita.
-		if !strings.Contains(c.query, "state = 'PENDING_REFERENCE'") {
-			t.Errorf("resolver exige PENDING_REFERENCE: %s", c.query)
+		// A resolução vale a partir de PENDING (referência já disponível na
+		// submissão) e PENDING_REFERENCE (retomada do worker) — nunca de
+		// um terminal.
+		if !strings.Contains(c.query, "state IN ('PENDING', 'PENDING_REFERENCE')") {
+			t.Errorf("resolver exige estado não terminal: %s", c.query)
 		}
 		return resposta{afetadas: 1}
 	})

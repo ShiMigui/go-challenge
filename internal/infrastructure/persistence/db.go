@@ -4,10 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shimigui/go-challenge/internal/config"
 )
+
+// isUniqueViolation reconhece a violação de unicidade do Postgres sem
+// importar o driver: o SQLSTATE 23505 vem no texto do erro.
+//
+// É a barreira técnica usada para traduzir duplicata real do banco em
+// conflito de negócio (carteira repetida por jogador+moeda, reversão
+// repetida da mesma referência).
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "23505")
+}
 
 // OpenDB abre o pool de conexões com o driver pgx.
 //
