@@ -40,23 +40,18 @@ type OutboxRepository interface {
 	Reschedule(ctx context.Context, id string, proximaTentativa time.Time, now time.Time) error
 }
 
-// PostgresOutbox é a implementação sobre o Postgres.
-type PostgresOutbox struct {
+// outboxRepository é a implementação sobre o banco.
+type outboxRepository struct {
 	db Querier
 }
 
 // NewOutboxRepository devolve o repositório de outbox.
 func NewOutboxRepository(db Querier) OutboxRepository {
-	return &PostgresOutbox{db: db}
-}
-
-// NewOutboxRepositoryWithTx creates a repository bound to the given transaction.
-func NewOutboxRepositoryWithTx(tx *sql.Tx) OutboxRepository {
-	return &PostgresOutbox{db: tx}
+	return &outboxRepository{db: db}
 }
 
 // Append grava o evento pendente.
-func (r *PostgresOutbox) Append(ctx context.Context, e *Event) error {
+func (r *outboxRepository) Append(ctx context.Context, e *Event) error {
 	if err := validUUID("event_id", e.id); err != nil {
 		return err
 	}
@@ -82,7 +77,7 @@ func (r *PostgresOutbox) Append(ctx context.Context, e *Event) error {
 }
 
 // ClaimBatch reserva uma lote de eventos para o worker.
-func (r *PostgresOutbox) ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*Event, error) {
+func (r *outboxRepository) ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*Event, error) {
 	if limite <= 0 {
 		limite = 100
 	}
@@ -155,7 +150,7 @@ func (r *PostgresOutbox) ClaimBatch(ctx context.Context, worker string, limite i
 const lockExpiracao = 60 * time.Second
 
 // MarkPublished carimba a publicação e solta o lock.
-func (r *PostgresOutbox) MarkPublished(ctx context.Context, id string, now time.Time) error {
+func (r *outboxRepository) MarkPublished(ctx context.Context, id string, now time.Time) error {
 	if err := validUUID("event_id", id); err != nil {
 		return err
 	}
@@ -179,7 +174,7 @@ func (r *PostgresOutbox) MarkPublished(ctx context.Context, id string, now time.
 }
 
 // Reschedule devolve o evento para a fila com novo prazo.
-func (r *PostgresOutbox) Reschedule(ctx context.Context, id string, proximaTentativa time.Time, now time.Time) error {
+func (r *outboxRepository) Reschedule(ctx context.Context, id string, proximaTentativa time.Time, now time.Time) error {
 	if err := validUUID("event_id", id); err != nil {
 		return err
 	}
