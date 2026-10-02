@@ -1,0 +1,151 @@
+name: wagering
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      DB_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/postgres/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    image: postgres:17-alpine
+    restart: no
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts/postgres/migrations:/migrations:ro
+      - ./scripts/postgres/migrate.sh:/migrate.sh:ro
+    command: ["sh", "/migrate.sh"]
+
+  localstack:
+    image: localstack/localstack:4
+    restart: unless-stopped
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: ${CLOUD_REGION}
+      EAGER_SERVICE_LOADING: "1"
+      PERSISTENCE: "1"
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - ./scripts/localstack-init:/etc/localstack/init/ready.d
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -fsS http://localhost:4566/_localstack/health | grep -q ''"sqs"'' || exit 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    restart: unless-stopped
+    command:
+      - start-dev
+      - --http-enabled=true
+      - --http-port=8080
+      - --hostname-strict=false
+      - --health-enabled=true
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${OIDC_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${OIDC_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN: ${OIDC_ADMIN_USER}
+      KEYCLOAK_ADMIN_PASSWORD: ${OIDC_ADMIN_PASSWORD}
+    ports:
+      - "8081:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: 1.27.1
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    environment:
+      API_PORT: ${API_PORT}
+      SERVICE_LOG_LEVEL: ${SERVICE_LOG_LEVEL}
+      STARTUP_TIMEOUT: ${STARTUP_TIMEOUT}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT}
+      APP_ENV: ${APP_ENV}
+
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSLMODE: ${DB_SSLMODE}
+      DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS}
+      DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS}
+      DB_CONN_MAX_LIFETIME: ${DB_CONN_MAX_LIFETIME}
+      DB_CONN_MAX_IDLE_TIME: ${DB_CONN_MAX_IDLE_TIME}
+
+      CLOUD_ACCESS_KEY_ID: ${CLOUD_ACCESS_KEY_ID}
+      CLOUD_SECRET_ACCESS_KEY: ${CLOUD_SECRET_ACCESS_KEY}
+      CLOUD_REGION: ${CLOUD_REGION}
+      CLOUD_ENDPOINT_URL_SQS: ${CLOUD_ENDPOINT_URL_SQS}
+
+      SQS_QUEUE_NAME: ${SQS_QUEUE_NAME}
+      SQS_QUEUE_DLQ_NAME: ${SQS_QUEUE_DLQ_NAME}
+      SQS_EVENTS_QUEUE_NAME: ${SQS_EVENTS_QUEUE_NAME}
+      SQS_VISIBILITY_TIMEOUT: ${SQS_VISIBILITY_TIMEOUT}
+      SQS_MAX_RECEIVE_COUNT: ${SQS_MAX_RECEIVE_COUNT}
+      SQS_WAIT_TIME: ${SQS_WAIT_TIME}
+      SQS_MAX_MESSAGES: ${SQS_MAX_MESSAGES}
+
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_PROVIDER_CLAIM: ${OIDC_PROVIDER_CLAIM}
+      OIDC_ROLES_CLAIM: ${OIDC_ROLES_CLAIM}
+    ports:
+      - "${API_PORT}:${API_PORT}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:${API_PORT}/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_signal: SIGTERM
+    stop_grace_period: 40s
+
+volumes:
+  postgres-data:
+  localstack-data:
+  keycloak-data:
+

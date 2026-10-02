@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# pre-commit: formata e verifica antes de gravar o commit.
+#
+# Verificacoes obrigatorias: nao ha bypass por variavel de ambiente.
+#
+#   1. gofmt -w nos arquivos Go do stage (o resultado volta para o stage)
+#   2. gofmt -l nos demais arquivos Go versionados (apenas detecta)
+#   3. go vet ./...
+#   4. go test ./...
+#
+# A execucao e ignorada quando nao ha arquivos Go no stage, para nao atrasar
+# commits que so tocam documentacao ou configuracao.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged_go="$(git diff --cached --name-only --diff-filter=ACMR -- '*.go' || true)"
+if [ -z "$staged_go" ]; then
+	echo "pre-commit: nenhum arquivo Go no stage, nada a verificar"
+	exit 0
+fi
+
+tracked_go="$(git ls-files '*.go' || true)"
+
+# 1a. Formatacao: gofmt -w apenas nos arquivos Go do stage. O resultado volta
+# para o stage, para que o commit ja nasca formatado em vez de falhar.
+# shellcheck disable=SC2086
+formatted="$(gofmt -l -w $staged_go || true)"
+if [ -n "$formatted" ]; then
+	echo "pre-commit: formatando: $formatted"
+	git add -- $formatted
+fi
+
+# 1b. Arquivos versionados e nao staged tambem precisam estar formatados, senao
+# o commit passa e o repositorio fica inconsistente.
+if [ -n "$tracked_go" ]; then
+	# shellcheck disable=SC2086
+	unformatted="$(gofmt -l $tracked_go || true)"
+	if [ -n "$unformatted" ]; then
+		echo "" >&2
+		echo "pre-commit: arquivos fora do gofmt:" >&2
+		echo "$unformatted" | sed 's/^/  /' >&2
+		echo "" >&2
+		echo "Rode 'make fmt' e tente novamente." >&2
+		exit 1
+	fi
+fi
+
+# 2. Analise estatica
+echo "pre-commit: go vet ./..."
+if ! go vet ./...; then
+	echo "" >&2
+	echo "pre-commit: go vet reprovou o codigo." >&2
+	echo "Corrija o problema antes de commitar." >&2
+	exit 1
+fi
+
+# 3. Testes
+echo "pre-commit: go test ./..."
+if ! go test ./...; then
+	echo "" >&2
+	echo "pre-commit: os testes falharam." >&2
+	echo "Corrija os testes antes de commitar." >&2
+	exit 1
+fi
+
+echo "pre-commit: ok"
+exit 0

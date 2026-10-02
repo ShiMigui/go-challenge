@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# pre-push: ultima barreira antes de publicar na origin.
+#
+#   1. go vet ./...
+#   2. go test -race ./...
+#
+# O detector de corrida fica aqui, e nao no pre-commit, porque o custo e alto
+# demais para rodar em todo commit. Nao ha bypass: a verificacao e obrigatoria.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-push: go vet"
+go vet ./...
+
+echo "pre-push: go test -race"
+go test -race ./...
+
+echo "pre-push: ok"
+exit 0

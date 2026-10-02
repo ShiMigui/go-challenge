@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Binarios gerados por `go build` e por `make build`
+/api
+/app.bin
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -26,6 +30,9 @@ go.work.sum
 
 # env file
 .env
+
+# Documento do desafio: leitura e conferência, fora do versionamento
+CHALLENGE.md
 
 # Editor/IDE
 # .idea/
