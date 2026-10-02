@@ -27,9 +27,8 @@ import (
 // casos de uso e interface HTTP.
 func Options() []fx.Option {
 	return []fx.Option{
-		fx.Provide(config.Load),
+		fx.Provide(func() config.Config { return config.MustLoad() }),
 		fx.Provide(func(cfg config.Config) config.DB { return cfg.DB }),
-		fx.Provide(persistence.OpenDB),
 
 		persistence.Module,
 		health.Module,

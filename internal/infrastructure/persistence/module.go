@@ -21,6 +21,7 @@ import (
 // nasce do ports.TransactionManager.
 var Module = fx.Module("persistence",
 	fx.Provide(
+		OpenDB,
 		NewTransactionManager,
 		func(db *sql.DB) wallet.WalletRepository {
 			return NewWalletRepository(db)

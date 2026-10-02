@@ -2,13 +2,20 @@
 //
 // Pacote folha: não importa nada além da biblioteca padrão, então pode
 // ser usado por qualquer camada sem risco de ciclo de importação.
+// A configuração é carregada automaticamente no init() e acessível via Get().
 package config
 
 import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
+)
+
+var (
+	cfg  Config
+	once sync.Once
 )
 
 // Config concentra a configuração de todas as dependências da aplicação.
@@ -40,12 +47,31 @@ type DB struct {
 	ConnMaxIdleTime time.Duration
 }
 
-// Load lê as variáveis de ambiente com os padrões do ambiente local.
-//
-// Valor numérico ou de duração malformado é erro: a aplicação não sobe
-// com configuração quebrada às escondidas.
-func Load() (Config, error) {
-	cfg := Config{
+// Get retorna a configuração carregada (thread-safe, carrega na primeira chamada).
+func Get() Config {
+	once.Do(func() {
+		var err error
+		cfg, err = load()
+		if err != nil {
+			panic(fmt.Errorf("config: falha ao carregar: %w", err))
+		}
+	})
+	return cfg
+}
+
+// MustLoad carrega a configuração e panica se houver erro (para uso em init()).
+func MustLoad() Config {
+	var err error
+	cfg, err = load()
+	if err != nil {
+		panic(fmt.Errorf("config: falha ao carregar: %w", err))
+	}
+	return cfg
+}
+
+// load faz o carregamento real das variáveis de ambiente.
+func load() (Config, error) {
+	c := Config{
 		API: API{
 			Port:     env("API_PORT", "8080"),
 			LogLevel: env("SERVICE_LOG_LEVEL", "debug"),
@@ -62,25 +88,25 @@ func Load() (Config, error) {
 	}
 
 	var err error
-	if cfg.API.StartupTimeout, err = durEnv("STARTUP_TIMEOUT", 30*time.Second); err != nil {
+	if c.API.StartupTimeout, err = durEnv("STARTUP_TIMEOUT", 30*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.API.ShutdownTimeout, err = durEnv("SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
+	if c.API.ShutdownTimeout, err = durEnv("SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.DB.MaxOpenConns, err = intEnv("DB_MAX_OPEN_CONNS", 25); err != nil {
+	if c.DB.MaxOpenConns, err = intEnv("DB_MAX_OPEN_CONNS", 25); err != nil {
 		return Config{}, err
 	}
-	if cfg.DB.MaxIdleConns, err = intEnv("DB_MAX_IDLE_CONNS", 5); err != nil {
+	if c.DB.MaxIdleConns, err = intEnv("DB_MAX_IDLE_CONNS", 5); err != nil {
 		return Config{}, err
 	}
-	if cfg.DB.ConnMaxLifetime, err = durEnv("DB_CONN_MAX_LIFETIME", 5*time.Minute); err != nil {
+	if c.DB.ConnMaxLifetime, err = durEnv("DB_CONN_MAX_LIFETIME", 5*time.Minute); err != nil {
 		return Config{}, err
 	}
-	if cfg.DB.ConnMaxIdleTime, err = durEnv("DB_CONN_MAX_IDLE_TIME", time.Minute); err != nil {
+	if c.DB.ConnMaxIdleTime, err = durEnv("DB_CONN_MAX_IDLE_TIME", time.Minute); err != nil {
 		return Config{}, err
 	}
-	return cfg, nil
+	return c, nil
 }
 
 // DSN monta a string de conexão esperada pelo driver pgx.
