@@ -3,42 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/shimigui/go-challenge/internal/domain/event"
 )
-
-// Event é um registro do outbox pronto para publicação.
-type Event struct {
-	id            string
-	aggregateType string
-	aggregateID   string
-	eventType     string
-	version       int
-	correlationID string
-	causationID   string
-	payload       []byte
-	occurredAt    time.Time
-	attempts      int
-}
-
-// OutboxRepository faz a publicação transacional dos eventos de domínio.
-type OutboxRepository interface {
-	// Append grava o evento na mesma transação da mudança que o produziu.
-	//
-	// É o que garante que o evento exista se e somente se a mudança
-	// existir: as duas gravações commitam juntas ou nenhuma.
-	Append(ctx context.Context, e *Event) error
-	// ClaimBatch reserva eventos pendentes para este worker.
-	//
-	// O FOR UPDATE SKIP LOCKED deixa vários workers competirem pelo mesmo
-	// backlog sem repetir evento: cada linha vai para um worker só.
-	ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*Event, error)
-	// MarkPublished carimba a publicação.
-	MarkPublished(ctx context.Context, id string, now time.Time) error
-	// Reschedule devolve o evento para nova tentativa com backoff.
-	Reschedule(ctx context.Context, id string, proximaTentativa time.Time, now time.Time) error
-}
 
 // outboxRepository é a implementação sobre o banco.
 type outboxRepository struct {
@@ -46,21 +15,20 @@ type outboxRepository struct {
 }
 
 // NewOutboxRepository devolve o repositório de outbox.
-func NewOutboxRepository(db Querier) OutboxRepository {
+func NewOutboxRepository(db Querier) event.OutboxRepository {
 	return &outboxRepository{db: db}
 }
 
 // Append grava o evento pendente.
-func (r *outboxRepository) Append(ctx context.Context, e *Event) error {
-	if err := validUUID("event_id", e.id); err != nil {
+//
+// A forma do payload já foi validada no construtor do evento de domínio;
+// aqui resta apenas a barreira técnica do formato de id.
+func (r *outboxRepository) Append(ctx context.Context, e *event.Event) error {
+	if err := validUUID("event_id", e.ID()); err != nil {
 		return err
 	}
-	if err := validUUID("aggregate_id", e.aggregateID); err != nil {
+	if err := validUUID("aggregate_id", e.AggregateID()); err != nil {
 		return err
-	}
-	// A constraint do banco exige objeto JSON, não array nem string.
-	if err := validaPayloadObjeto(e.payload); err != nil {
-		return fmt.Errorf("evento %s: %w", e.id, err)
 	}
 	const q = `
 		INSERT INTO outbox (
@@ -69,15 +37,15 @@ func (r *outboxRepository) Append(ctx context.Context, e *Event) error {
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	_, err := r.db.ExecContext(ctx, q,
-		e.id, e.aggregateType, e.aggregateID, e.eventType, e.version,
-		nullString(e.correlationID), nullString(e.causationID),
-		e.payload, e.occurredAt, e.occurredAt,
+		e.ID(), e.AggregateType(), e.AggregateID(), e.EventType(), e.Version(),
+		nullString(e.CorrelationID()), nullString(e.CausationID()),
+		e.Payload(), e.OccurredAt(), e.OccurredAt(),
 	)
 	return err
 }
 
 // ClaimBatch reserva uma lote de eventos para o worker.
-func (r *outboxRepository) ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*Event, error) {
+func (r *outboxRepository) ClaimBatch(ctx context.Context, worker string, limite int, now time.Time) ([]*event.Event, error) {
 	if limite <= 0 {
 		limite = 100
 	}
@@ -123,25 +91,31 @@ func (r *outboxRepository) ClaimBatch(ctx context.Context, worker string, limite
 		RETURNING id, aggregate_type, aggregate_id, event_type, event_version,
 			correlation_id, causation_id, payload, occurred_at, attempts
 	`
-	var saida []*Event
+	var saida []*event.Event
 	for _, id := range ids {
 		var (
-			e             Event
+			aggregateType string
+			aggregateID   string
+			eventType     string
+			version       int
 			correlationID sql.NullString
 			causationID   sql.NullString
-			version       int
+			payload       []byte
+			occurredAt    time.Time
+			attempts      int
 		)
 		err := r.db.QueryRowContext(ctx, atualiza, worker, now, id).Scan(
-			&e.id, &e.aggregateType, &e.aggregateID, &e.eventType, &version,
-			&correlationID, &causationID, &e.payload, &e.occurredAt, &e.attempts,
+			&id, &aggregateType, &aggregateID, &eventType, &version,
+			&correlationID, &causationID, &payload, &occurredAt, &attempts,
 		)
 		if err != nil {
 			return nil, err
 		}
-		e.version = version
-		e.correlationID = stringFromNull(correlationID)
-		e.causationID = stringFromNull(causationID)
-		saida = append(saida, &e)
+		saida = append(saida, event.Rehydrate(
+			id, aggregateType, aggregateID, eventType, version,
+			stringFromNull(correlationID), stringFromNull(causationID),
+			payload, occurredAt, attempts,
+		))
 	}
 	return saida, nil
 }
@@ -193,92 +167,6 @@ func (r *outboxRepository) Reschedule(ctx context.Context, id string, proximaTen
 	}
 	if afetadas == 0 {
 		return fmt.Errorf("%w: evento %s ja publicado ou inexistente", ErrNotFound, id)
-	}
-	return nil
-}
-
-// NewEvent monta um evento de outbox.
-//
-// O id é gerado fora e preservado entre republicações: quem consome
-// consegue deduplicar pelo mesmo id mesmo vendo o evento mais de uma vez.
-func NewEvent(id, aggregateType, aggregateID, eventType string, version int, payload []byte, now time.Time) (*Event, error) {
-	if err := validUUID("event_id", id); err != nil {
-		return nil, err
-	}
-	if err := validUUID("aggregate_id", aggregateID); err != nil {
-		return nil, err
-	}
-	if version < 1 {
-		return nil, fmt.Errorf("event_version deve ser >= 1, veio %d", version)
-	}
-	if err := validaPayloadObjeto(payload); err != nil {
-		return nil, fmt.Errorf("evento %s: %w", id, err)
-	}
-	return &Event{
-		id:            id,
-		aggregateType: aggregateType,
-		aggregateID:   aggregateID,
-		eventType:     eventType,
-		version:       version,
-		payload:       payload,
-		occurredAt:    now,
-	}, nil
-}
-
-// ID devolve a identidade estável do evento.
-func (e *Event) ID() string { return e.id }
-
-// AggregateType devolve o tipo do agregado de origem.
-func (e *Event) AggregateType() string { return e.aggregateType }
-
-// AggregateID devolve a identidade do agregado de origem.
-func (e *Event) AggregateID() string { return e.aggregateID }
-
-// EventType devolve o nome do evento.
-func (e *Event) EventType() string { return e.eventType }
-
-// Version devolve a versão do contrato.
-func (e *Event) Version() int { return e.version }
-
-// CorrelationID devolve a correlação, vazia se não houver.
-func (e *Event) CorrelationID() string { return e.correlationID }
-
-// CausationID devolve a causa, vazia se não houver.
-func (e *Event) CausationID() string { return e.causationID }
-
-// WithCorrelation devolve uma cópia do evento com correlação e causa.
-func (e *Event) WithCorrelation(correlationID, causationID string) *Event {
-	copia := *e
-	copia.correlationID = correlationID
-	copia.causationID = causationID
-	return &copia
-}
-
-// Payload devolve o snapshot imutável do envelope.
-func (e *Event) Payload() []byte { return e.payload }
-
-// OccurredAt devolve o instante em que o fato ocorreu.
-func (e *Event) OccurredAt() time.Time { return e.occurredAt }
-
-// Attempts devolve quantas vezes o evento foi tentado.
-func (e *Event) Attempts() int { return e.attempts }
-
-// validaPayloadObjeto exige um objeto JSON, que é o que a constraint do
-// banco aceita (jsonb_typeof = 'object').
-//
-// Checar aqui evita a recusa pelo banco, que voltaria como erro genérico
-// de constraint em vez de entrada inválida.
-func validaPayloadObjeto(payload []byte) error {
-	if !json.Valid(payload) {
-		return fmt.Errorf("payload nao e JSON valido")
-	}
-	var objeto map[string]any
-	if err := json.Unmarshal(payload, &objeto); err != nil {
-		// Unmarshal em map falha para array, string, número e null.
-		return fmt.Errorf("payload precisa ser objeto JSON: %w", err)
-	}
-	if objeto == nil {
-		return fmt.Errorf("payload nao pode ser null")
 	}
 	return nil
 }

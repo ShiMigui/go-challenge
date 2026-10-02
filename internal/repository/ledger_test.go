@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/event"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/wallet"
@@ -249,7 +250,7 @@ func TestInboxCountAttemptsInexistente(t *testing.T) {
 }
 
 func TestOutboxGetters(t *testing.T) {
-	e, err := NewEvent(eventID, "wallet", walletID, "WalletBalanceChanged", 2,
+	e, err := event.NewEvent(eventID, "wallet", walletID, "WalletBalanceChanged", 2,
 		[]byte(`{"saldo":"150.00"}`), t0)
 	if err != nil {
 		t.Fatal(err)
@@ -272,10 +273,10 @@ func TestNewEventRecusaIDInvalido(t *testing.T) {
 	db := abrirFalso(t, "o10", func(c consulta) resposta { return resposta{afetadas: 1} })
 	_ = NewOutboxRepository(db)
 
-	if _, err := NewEvent("nao-e-uuid", "wallet", walletID, "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
+	if _, err := event.NewEvent("nao-e-uuid", "wallet", walletID, "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("event_id inválido deveria falhar")
 	}
-	if _, err := NewEvent(eventID, "wallet", "nao-e-uuid", "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
+	if _, err := event.NewEvent(eventID, "wallet", "nao-e-uuid", "Evento", 1, []byte(`{}`), t0); !errors.Is(err, identifier.ErrInvalidID) {
 		t.Errorf("aggregate_id inválido deveria falhar")
 	}
 }

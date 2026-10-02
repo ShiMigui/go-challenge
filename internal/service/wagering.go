@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/event"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
@@ -16,7 +17,7 @@ type WageringService struct {
 	wagerRepo  repository.WagerTransactionRepository
 	walletRepo repository.WalletRepository
 	ledgerRepo repository.LedgerRepository
-	outboxRepo repository.OutboxRepository
+	outboxRepo event.OutboxRepository
 	txManager  repository.TransactionManager
 }
 
@@ -24,7 +25,7 @@ func NewWageringService(
 	wagerRepo repository.WagerTransactionRepository,
 	walletRepo repository.WalletRepository,
 	ledgerRepo repository.LedgerRepository,
-	outboxRepo repository.OutboxRepository,
+	outboxRepo event.OutboxRepository,
 	txManager repository.TransactionManager,
 ) *WageringService {
 	return &WageringService{
@@ -107,7 +108,7 @@ func (s *WageringService) SubmitTransaction(ctx context.Context, params wager.Ex
 				return err
 			}
 
-			evt, err := repository.NewEvent(
+			evt, err := event.NewEvent(
 				identifier.New(),
 				"wallet",
 				wlt.ID(),

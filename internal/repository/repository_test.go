@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/domain/event"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
@@ -630,7 +631,7 @@ func TestOutboxAppend(t *testing.T) {
 	})
 	repo := NewOutboxRepository(db)
 
-	evento, err := NewEvent(eventID, "wallet", walletID, "WalletBalanceChanged", 1,
+	evento, err := event.NewEvent(eventID, "wallet", walletID, "WalletBalanceChanged", 1,
 		[]byte(`{"saldo":"150.00"}`), t0)
 	if err != nil {
 		t.Fatal(err)
@@ -646,7 +647,7 @@ func TestOutboxAppendRecusaPayloadInvalido(t *testing.T) {
 
 	// O banco exige objeto JSON, não array nem string solta.
 	for _, payload := range [][]byte{[]byte("nao é json"), []byte(`[1,2]`), []byte(`"texto"`), nil} {
-		if _, err := NewEvent(eventID, "wallet", walletID, "Evento", 1, payload, t0); err == nil {
+		if _, err := event.NewEvent(eventID, "wallet", walletID, "Evento", 1, payload, t0); err == nil {
 			t.Errorf("payload %q deveria ser recusado", payload)
 		}
 	}
@@ -656,7 +657,7 @@ func TestOutboxVersionMinima(t *testing.T) {
 	db := abrirFalso(t, "o3", func(c consulta) resposta { return resposta{afetadas: 1} })
 	_ = NewOutboxRepository(db)
 
-	if _, err := NewEvent(eventID, "wallet", walletID, "Evento", 0,
+	if _, err := event.NewEvent(eventID, "wallet", walletID, "Evento", 0,
 		[]byte(`{}`), t0); err == nil {
 		t.Error("event_version 0 deveria ser recusado")
 	}
@@ -765,7 +766,7 @@ func TestOutboxCorrelationNaoAlteraOriginal(t *testing.T) {
 	db := abrirFalso(t, "o9", func(c consulta) resposta { return resposta{afetadas: 1} })
 	_ = NewOutboxRepository(db)
 
-	evento, _ := NewEvent(eventID, "wallet", walletID, "Evento", 1, []byte(`{}`), t0)
+	evento, _ := event.NewEvent(eventID, "wallet", walletID, "Evento", 1, []byte(`{}`), t0)
 	comCorrelacao := evento.WithCorrelation("corr-1", txID)
 	if comCorrelacao.CorrelationID() != "corr-1" || comCorrelacao.CausationID() != txID {
 		t.Error("correlação não foi aplicada")
