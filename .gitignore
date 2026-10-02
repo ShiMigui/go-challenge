@@ -31,6 +31,9 @@ go.work.sum
 # env file
 .env
 
+# Documento do desafio: leitura e conferência, fora do versionamento
+CHALLENGE.md
+
 # Editor/IDE
 # .idea/
 # .vscode/
