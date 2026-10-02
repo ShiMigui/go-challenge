@@ -13,7 +13,6 @@ services:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./migrations:/migrations:ro
       - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
@@ -85,12 +84,13 @@ services:
       localstack:
         condition: service_healthy
       keycloak:
-        condition: service_healthy
+        condition: service_started
     environment:
       API_PORT: ${API_PORT}
       SERVICE_LOG_LEVEL: ${SERVICE_LOG_LEVEL}
       STARTUP_TIMEOUT: ${STARTUP_TIMEOUT}
       SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT}
+      APP_ENV: ${APP_ENV}
 
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
@@ -137,3 +137,4 @@ volumes:
   postgres-data:
   localstack-data:
   keycloak-data:
+

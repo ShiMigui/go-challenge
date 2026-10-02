@@ -13,8 +13,9 @@ import (
 
 // Config concentra a configuração de todas as dependências da aplicação.
 type Config struct {
-	API API
-	DB  DB
+	API    API
+	DB     DB
+	AppEnv string
 }
 
 // API é a configuração do servidor HTTP.
@@ -57,6 +58,7 @@ func Load() (Config, error) {
 			Password: env("DB_PASSWORD", "wagering"),
 			SSLMode:  env("DB_SSLMODE", "disable"),
 		},
+		AppEnv: env("APP_ENV", "production"),
 	}
 
 	var err error

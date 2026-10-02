@@ -243,8 +243,8 @@ func TestWagerInsert(t *testing.T) {
 			t.Errorf("esperava ON CONFLICT DO NOTHING: %s", c.query)
 		}
 		args := argsVistos(c.args)
-		if len(args) != 14 {
-			t.Errorf("esperava 14 argumentos, veio %d", len(args))
+		if len(args) != 16 {
+			t.Errorf("esperava 16 argumentos, veio %d", len(args))
 		}
 		return resposta{colunas: []string{"id"}, linhas: [][]driver.Value{{txID}}}
 	})

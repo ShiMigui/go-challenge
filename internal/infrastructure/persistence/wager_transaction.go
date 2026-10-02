@@ -42,9 +42,10 @@ func (r *wagerRepository) Insert(ctx context.Context, tx *wager.Transaction) err
 		INSERT INTO wager_transactions (
 			id, kind, provider_id, external_transaction_id, idempotency_key,
 			payload_hash, player_id, wallet_id, round_id, game_id, currency,
-			amount, reference_external_transaction_id, state
+			amount, reference_external_transaction_id, state,
+			created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 		)
 		ON CONFLICT DO NOTHING
 		RETURNING id
@@ -57,6 +58,7 @@ func (r *wagerRepository) Insert(ctx context.Context, tx *wager.Transaction) err
 		nullString(tx.RoundID()), nullString(tx.GameID()),
 		string(tx.Currency()), tx.Amount().Amount(),
 		nullString(tx.ReferenceExternalID()), string(tx.State()),
+		tx.CreatedAt(), tx.CreatedAt(),
 	).Scan(&id)
 	if err == nil {
 		return nil

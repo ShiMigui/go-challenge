@@ -19,6 +19,7 @@ import (
 	"github.com/shimigui/go-challenge/internal/infrastructure/health"
 	"github.com/shimigui/go-challenge/internal/infrastructure/persistence"
 	httpfx "github.com/shimigui/go-challenge/internal/interfaces/http/fxapp"
+	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
 )
 
 // Options devolve as opções Fx da aplicação inteira, na ordem de camadas:
@@ -44,6 +45,9 @@ func Options() []fx.Option {
 // lifecycle liga o servidor HTTP e o worker de referências ao ciclo de
 // vida do Fx: sobem junto com o app, descem com shutdown gracioso na parada.
 func lifecycle(lc fx.Lifecycle, cfg config.Config, handler http.Handler, worker *wagering.ReferenceWorker) {
+	// Configura o ambiente para controle de mensagens de erro
+	middleware.SetAppEnv(cfg.AppEnv)
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.API.Port,
 		Handler:           handler,
