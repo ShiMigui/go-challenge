@@ -46,8 +46,13 @@ type PostgresOutbox struct {
 }
 
 // NewOutboxRepository devolve o repositório de outbox.
-func NewOutboxRepository(db Querier) *PostgresOutbox {
+func NewOutboxRepository(db Querier) OutboxRepository {
 	return &PostgresOutbox{db: db}
+}
+
+// NewOutboxRepositoryWithTx creates a repository bound to the given transaction.
+func NewOutboxRepositoryWithTx(tx *sql.Tx) OutboxRepository {
+	return &PostgresOutbox{db: tx}
 }
 
 // Append grava o evento pendente.
