@@ -39,6 +39,10 @@ type WagerTransactionRepository interface {
 	FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error)
 	// FindByIdempotencyKey devolve a transação pela chave de deduplicação.
 	FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error)
+	// CheckIdempotency verifica se uma chave de idempotência já foi usada
+	// com o mesmo hash de payload. Se o hash for diferente, retorna
+	// ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
+	CheckIdempotency(ctx context.Context, key, payloadHash string) error
 	// UpdateState grava estado, falha, carimbo de conclusão e a espera da
 	// referência. Só estado não terminal é aceito.
 	UpdateState(ctx context.Context, tx *wager.Transaction) error
@@ -74,8 +78,13 @@ type PostgresWagerTransaction struct {
 }
 
 // NewWagerTransactionRepository devolve o repositório de transações.
-func NewWagerTransactionRepository(db Querier) *PostgresWagerTransaction {
+func NewWagerTransactionRepository(db Querier) WagerTransactionRepository {
 	return &PostgresWagerTransaction{db: db}
+}
+
+// NewWagerTransactionRepositoryWithTx creates a repository bound to the given transaction.
+func NewWagerTransactionRepositoryWithTx(tx *sql.Tx) WagerTransactionRepository {
+	return &PostgresWagerTransaction{db: tx}
 }
 
 // Insert grava a transação ou devolve a que já existia.
@@ -176,6 +185,26 @@ func (r *PostgresWagerTransaction) FindByIdempotencyKey(ctx context.Context, pro
 		FROM wager_transactions
 		WHERE provider_id = $1 AND idempotency_key = $2`
 	return r.scanOne(ctx, q, providerID, key)
+}
+
+// CheckIdempotency verifica se uma chave de idempotência já foi usada
+// com o mesmo hash de payload. Se o hash for diferente, retorna
+// ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
+func (r *PostgresWagerTransaction) CheckIdempotency(ctx context.Context, key, payloadHash string) error {
+	const q = `SELECT payload_hash FROM wager_transactions WHERE idempotency_key = $1`
+	var storedHash string
+	err := r.db.QueryRowContext(ctx, q, key).Scan(&storedHash)
+	if err == sql.ErrNoRows {
+		return nil // chave não existe, sem conflito
+	}
+	if err != nil {
+		return err
+	}
+	if storedHash != payloadHash {
+		return fmt.Errorf("%w: chave %s com hashes %s e %s",
+			wager.ErrIdempotencyConflict, key, payloadHash, storedHash)
+	}
+	return nil // mesmo hash, reentrega válida
 }
 
 // UpdateState grava a transição de estado.
