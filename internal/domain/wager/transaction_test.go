@@ -129,8 +129,8 @@ func TestAberturaNaoTemCamposExternos(t *testing.T) {
 }
 
 func TestAberturaNaoVeioDeFora(t *testing.T) {
-	// Chegar como operação externa com OPENING significa que veio de HTTP
-	// ou SQS: tem que ser recusado.
+	// Chegar como operação externa com OPENING significa que veio de fora:
+	// tem que ser recusado.
 	_, err := NewExternal(ExternalParams{
 		ID: "tx1", ProviderID: "prov", ExternalID: "ext",
 		IdempotencyKey: "k", PayloadHash: "h",

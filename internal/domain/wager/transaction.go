@@ -189,7 +189,7 @@ type OpeningParams struct {
 // NewOpening cria a abertura interna de uma carteira.
 //
 // É a única origem interna: não tem provedor, id externo, chave, hash,
-// rodada, jogo nem referência, e não pode ser criada a partir de HTTP ou SQS.
+// rodada, jogo nem referência, e não pode ser criada por uma entrada externa.
 func NewOpening(p OpeningParams) (*Transaction, error) {
 	if p.ID == "" {
 		return nil, ErrInvalidTransactionID
@@ -242,7 +242,7 @@ func NewExternal(p ExternalParams) (*Transaction, error) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidKind, string(p.Kind))
 	}
 	// OPENING é reservada à abertura interna. Chegar aqui significa que veio
-	// de HTTP ou SQS, e precisa ser recusado.
+	// de uma entrada externa, e precisa ser recusado.
 	if p.Kind == KindOpening {
 		return nil, ErrExternalNotAllowed
 	}
