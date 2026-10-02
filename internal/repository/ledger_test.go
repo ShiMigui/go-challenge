@@ -12,6 +12,7 @@ import (
 	"github.com/shimigui/go-challenge/internal/domain/event"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
+	"github.com/shimigui/go-challenge/internal/domain/wager"
 	"github.com/shimigui/go-challenge/internal/domain/wallet"
 )
 
@@ -66,7 +67,7 @@ func TestLedgerAppendDuplicadoNaoFalha(t *testing.T) {
 
 	err := repo.Append(context.Background(),
 		novoLancamento(t, ledger.Credit, "50.00", "100.00", "150.00"))
-	if !errors.Is(err, ErrDuplicate) {
+	if !errors.Is(err, wager.ErrDuplicate) {
 		t.Errorf("esperava ErrDuplicate, veio %v", err)
 	}
 }

@@ -14,36 +14,13 @@ import (
 // SELECT não Divirjam.
 const walletColumns = `id, player_id, currency, balance, version, created_at, updated_at`
 
-// WalletRepository persiste a carteira.
-type WalletRepository interface {
-	// Insert grava uma carteira nova. A unicidade de (player, currency)
-	// é do banco; violação volta como ErrDuplicate.
-	Insert(ctx context.Context, w *wallet.Wallet) error
-	// UpdateBalance grava o novo saldo exigindo a versão lida.
-	//
-	// O version bump fica no trigger, então a escrita envia só balance.
-	// A cláusula WHERE version = $3 é o que impede lost update: se
-	// outra instância mexeu na carteira no meio, nenhuma linha é
-	// atualizada e vem ErrOptimisticLock.
-	UpdateBalance(ctx context.Context, w *wallet.Wallet) error
-	// FindByID devolve a carteira pela identidade.
-	FindByID(ctx context.Context, id string) (*wallet.Wallet, error)
-	// FindByPlayerAndCurrency devolve a carteira de um jogador na moeda.
-	FindByPlayerAndCurrency(ctx context.Context, playerID string, currency money.Currency) (*wallet.Wallet, error)
-	// LockByID devolve a carteira com SELECT FOR UPDATE.
-	//
-	// Usado quando a operação precisa de saldo estável por mais de uma
-	// leitura dentro da mesma transação.
-	LockByID(ctx context.Context, id string) (*wallet.Wallet, error)
-}
-
 // walletRepository é a implementação sobre o banco.
 type walletRepository struct {
 	db Querier
 }
 
 // NewWalletRepository devolve o repositório de carteira.
-func NewWalletRepository(db Querier) WalletRepository {
+func NewWalletRepository(db Querier) wallet.WalletRepository {
 	return &walletRepository{db: db}
 }
 

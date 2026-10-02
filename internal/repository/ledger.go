@@ -8,27 +8,11 @@ import (
 
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
+	"github.com/shimigui/go-challenge/internal/domain/wager"
 )
 
 const ledgerColumns = `id, wallet_id, transaction_id, direction, amount,
 	currency, balance_before, balance_after, created_at`
-
-// LedgerRepository persiste os lançamentos da carteira.
-type LedgerRepository interface {
-	// Append grava um lançamento. A tabela é append-only no banco, então
-	// não existe método de update nem de delete por construção.
-	Append(ctx context.Context, e *ledger.Entry) error
-	// FindByTransaction devolve o lançamento de uma transação.
-	//
-	// O par (wallet, transaction) é único, então há no máximo um.
-	FindByTransaction(ctx context.Context, transactionID string) (*ledger.Entry, error)
-	// ListByWallet devolve o extrato da carteira, do mais novo para o mais
-	// antigo, com paginação.
-	ListByWallet(ctx context.Context, walletID string, limite int) ([]*ledger.Entry, error)
-	// ListByWalletAll devolve todos os lançamentos da carteira, do mais
-	// novo para o mais antigo, sem paginação.
-	ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error)
-}
 
 // ledgerRepository é a implementação sobre o banco.
 type ledgerRepository struct {
@@ -36,7 +20,7 @@ type ledgerRepository struct {
 }
 
 // NewLedgerRepository devolve o repositório de ledger.
-func NewLedgerRepository(db Querier) LedgerRepository {
+func NewLedgerRepository(db Querier) ledger.LedgerRepository {
 	return &ledgerRepository{db: db}
 }
 
@@ -68,7 +52,7 @@ func (r *ledgerRepository) Append(ctx context.Context, e *ledger.Entry) error {
 	if err == sql.ErrNoRows {
 		// Já existe lançamento para esta transação. Repetir não é erro:
 		// reentrega at-least-once tenta de novo e precisa sair quieta.
-		return &Duplicate{Err: ErrDuplicate, Operation: "append"}
+		return &wager.Duplicate{Err: wager.ErrDuplicate, Operation: "append"}
 	}
 	if err != nil {
 		return err

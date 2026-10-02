@@ -12,14 +12,14 @@ import (
 )
 
 type WalletService struct {
-	walletRepo repository.WalletRepository
-	ledgerRepo repository.LedgerRepository
+	walletRepo wallet.WalletRepository
+	ledgerRepo ledger.LedgerRepository
 	txManager  repository.TransactionManager
 }
 
 func NewWalletService(
-	walletRepo repository.WalletRepository,
-	ledgerRepo repository.LedgerRepository,
+	walletRepo wallet.WalletRepository,
+	ledgerRepo ledger.LedgerRepository,
 	txManager repository.TransactionManager,
 ) *WalletService {
 	return &WalletService{

@@ -270,12 +270,12 @@ func TestWagerInsertDuplicadoDevolveExistente(t *testing.T) {
 	repo := NewWagerTransactionRepository(db)
 
 	err := repo.Insert(context.Background(), novaAposta(t, txID, "ext-1", "10.00"))
-	if !errors.Is(err, ErrDuplicate) {
+	if !errors.Is(err, wager.ErrDuplicate) {
 		t.Fatalf("esperava ErrDuplicate, veio %v", err)
 	}
-	var dup *Duplicate
+	var dup *wager.Duplicate
 	if !errors.As(err, &dup) {
-		t.Fatal("esperava *Duplicate para recuperar a transação existente")
+		t.Fatal("esperava *wager.Duplicate para recuperar a transação existente")
 	}
 	if dup.Existing == nil || dup.Existing.ID() != txID {
 		t.Fatal("a transação existente não veio junto")
@@ -466,10 +466,10 @@ func TestWagerInsertDuplicadoDeAbertura(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = repo.Insert(context.Background(), abertura)
-	if !errors.Is(err, ErrDuplicate) {
+	if !errors.Is(err, wager.ErrDuplicate) {
 		t.Fatalf("esperava ErrDuplicate, veio %v", err)
 	}
-	var dup *Duplicate
+	var dup *wager.Duplicate
 	if !errors.As(err, &dup) || dup.Existing == nil {
 		t.Fatal("esperava a transação existente")
 	}
@@ -491,10 +491,10 @@ func TestWagerInsertDuplicadoSemIdentidadeLocalizavel(t *testing.T) {
 	repo := NewWagerTransactionRepository(db)
 
 	err := repo.Insert(context.Background(), novaAposta(t, txID, "ext-1", "10.00"))
-	if !errors.Is(err, ErrDuplicate) {
+	if !errors.Is(err, wager.ErrDuplicate) {
 		t.Errorf("esperava ErrDuplicate, veio %v", err)
 	}
-	var dup *Duplicate
+	var dup *wager.Duplicate
 	if !errors.As(err, &dup) {
 		t.Fatal("esperava *Duplicate")
 	}

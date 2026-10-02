@@ -10,21 +10,22 @@ import (
 	"github.com/shimigui/go-challenge/internal/domain/ledger"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
+	"github.com/shimigui/go-challenge/internal/domain/wallet"
 	"github.com/shimigui/go-challenge/internal/repository"
 )
 
 type WageringService struct {
-	wagerRepo  repository.WagerTransactionRepository
-	walletRepo repository.WalletRepository
-	ledgerRepo repository.LedgerRepository
+	wagerRepo  wager.WagerTransactionRepository
+	walletRepo wallet.WalletRepository
+	ledgerRepo ledger.LedgerRepository
 	outboxRepo event.OutboxRepository
 	txManager  repository.TransactionManager
 }
 
 func NewWageringService(
-	wagerRepo repository.WagerTransactionRepository,
-	walletRepo repository.WalletRepository,
-	ledgerRepo repository.LedgerRepository,
+	wagerRepo wager.WagerTransactionRepository,
+	walletRepo wallet.WalletRepository,
+	ledgerRepo ledger.LedgerRepository,
 	outboxRepo event.OutboxRepository,
 	txManager repository.TransactionManager,
 ) *WageringService {

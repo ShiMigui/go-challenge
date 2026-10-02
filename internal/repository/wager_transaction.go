@@ -11,66 +11,11 @@ import (
 	"github.com/shimigui/go-challenge/internal/domain/wager"
 )
 
-// ErrDuplicate é devolvido quando a identidade única já existe.
-//
-// Vale para (provider, external_transaction_id), (provider,
-// idempotency_key) e para a reversão única por referência. O chamador
-// trata como reentrega, não como erro.
-var ErrDuplicate = errors.New("registro duplicado")
-
 const wagerColumns = `id, kind, provider_id, external_transaction_id,
 	idempotency_key, payload_hash, player_id, wallet_id, round_id, game_id,
 	currency, amount, reference_external_transaction_id, reference_transaction_id,
 	state, failure_code, failure_message, reference_attempts,
 	reference_next_attempt_at, created_at, updated_at, processed_at`
-
-// WagerTransactionRepository persiste as operações de wagering.
-type WagerTransactionRepository interface {
-	// Insert grava a transação.
-	//
-	// Identidade repetida volta como ErrDuplicate, com a transação
-	// existente em Duplicate. É assim que a idempotência do provedor
-	// funciona: a reentrega encontra o registro anterior em vez de
-	// processar de novo.
-	Insert(ctx context.Context, tx *wager.Transaction) error
-	// FindByID devolve a transação pela identidade interna.
-	FindByID(ctx context.Context, id string) (*wager.Transaction, error)
-	// FindByExternalID devolve a transação pelo par (provider, id externo).
-	FindByExternalID(ctx context.Context, providerID, externalID string) (*wager.Transaction, error)
-	// FindByIdempotencyKey devolve a transação pela chave de deduplicação.
-	FindByIdempotencyKey(ctx context.Context, providerID, key string) (*wager.Transaction, error)
-	// CheckIdempotency verifica se uma chave de idempotência já foi usada
-	// com o mesmo hash de payload. Se o hash for diferente, retorna
-	// ErrIdempotencyConflict. Se a chave não existe, não retorna erro.
-	CheckIdempotency(ctx context.Context, key, payloadHash string) error
-	// UpdateState grava estado, falha, carimbo de conclusão e a espera da
-	// referência. Só estado não terminal é aceito.
-	UpdateState(ctx context.Context, tx *wager.Transaction) error
-	// ResolveReference associa a referência interna já resolvida.
-	ResolveReference(ctx context.Context, tx *wager.Transaction) error
-	// ListPendingReferences devolve as transações esperando referência cujo
-	// prazo já venceu, para o worker reprocessar.
-	ListPendingReferences(ctx context.Context, agora time.Time, limite int) ([]*wager.Transaction, error)
-}
-
-// Duplicate carrega a transação que já existia quando houve violação de
-// unicidade.
-type Duplicate struct {
-	Err       error
-	Existing  *wager.Transaction
-	Operation string
-}
-
-// Error devolve a descrição do conflito.
-func (d *Duplicate) Error() string {
-	if d.Existing != nil {
-		return d.Err.Error() + ": " + d.Operation + " de " + d.Existing.ID()
-	}
-	return d.Err.Error() + ": " + d.Operation
-}
-
-// Unwrap expõe a causa para errors.Is.
-func (d *Duplicate) Unwrap() error { return d.Err }
 
 // wagerRepository é a implementação sobre o banco.
 type wagerRepository struct {
@@ -78,7 +23,7 @@ type wagerRepository struct {
 }
 
 // NewWagerTransactionRepository devolve o repositório de transações.
-func NewWagerTransactionRepository(db Querier) WagerTransactionRepository {
+func NewWagerTransactionRepository(db Querier) wager.WagerTransactionRepository {
 	return &wagerRepository{db: db}
 }
 
@@ -126,7 +71,7 @@ func (r *wagerRepository) Insert(ctx context.Context, tx *wager.Transaction) err
 	if err != nil {
 		return err
 	}
-	return &Duplicate{Err: ErrDuplicate, Existing: existente, Operation: "insert"}
+	return &wager.Duplicate{Err: wager.ErrDuplicate, Existing: existente, Operation: "insert"}
 }
 
 // findByIdentity procura a transação que colidiu com a inserção.
