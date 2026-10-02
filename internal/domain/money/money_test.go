@@ -352,3 +352,55 @@ func TestParseSemResiduoDeFloat(t *testing.T) {
 		t.Errorf("saída com notação científica: %q", m)
 	}
 }
+
+// Regressão: somar sinais opostos NUNCA é overflow. A heurística antiga
+// ((sum > m.amount) != (m.amount > 0)) marcava -25.00 + 100.00 como estouro e
+// quebrava a reconciliação do ledger — debitos somados com créditos.
+func TestAddSinaisOpostosNaoEstoura(t *testing.T) {
+	neg, err := MustParse("25.00", BRL).Neg()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pos := MustParse("100.00", BRL)
+
+	// neg (+ pos) e pos (+ neg) devem dar o mesmo resultado.
+	for _, par := range []struct{ a, b Money }{{neg, pos}, {pos, neg}} {
+		got, err := par.a.Add(par.b)
+		if err != nil {
+			t.Fatalf("%s + %s: %v", par.a, par.b, err)
+		}
+		if got.String() != "75.00" {
+			t.Errorf("soma = %s, quer 75.00", got)
+		}
+	}
+}
+
+func TestAddNegativoComNegativoFazSentido(t *testing.T) {
+	a, err := MustParse("10.00", BRL).Neg()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := MustParse("5.00", BRL).Neg()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := a.Add(b)
+	if err != nil {
+		t.Fatalf("-10.00 + -5.00: %v", err)
+	}
+	if got.String() != "-15.00" {
+		t.Errorf("soma = %s, quer -15.00", got)
+	}
+}
+
+func TestAddOverflowNegativo(t *testing.T) {
+	// MinInt64 + MinInt64 estoura para o lado positivo.
+	minMoney, err := New(math.MinInt64, BRL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := minMoney.Add(minMoney); !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("soma min+min deveria estourar, veio %v", err)
+	}
+}

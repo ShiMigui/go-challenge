@@ -140,8 +140,16 @@ func (m Money) Add(other Money) (Money, error) {
 		return Money{}, fmt.Errorf("%w: %s + %s", ErrCurrencyMismatch, m.currency, other.currency)
 	}
 	sum := m.amount + other.amount
-	// Overflow só é possível quando os dois somandos têm o mesmo sinal.
-	if (sum > m.amount) != (m.amount > 0) && (m.amount != 0) {
+	// Overflow só acontece quando os operandos têm o mesmo sinal: só aí a
+	// soma pode estourar int64. Com sinais opostos o resultado sempre cabe
+	// no intervalo, então não há overflow a detectar.
+	//
+	// Dois negativos somam resultado negativo legítimo; qualquer soma >= 0
+	// nesse caso é estouro (MinInt64 + MinInt64 wrappeia para 0).
+	switch {
+	case m.amount > 0 && other.amount > 0 && sum < 0:
+		return Money{}, fmt.Errorf("%w: overflow na soma", ErrInvalidAmount)
+	case m.amount < 0 && other.amount < 0 && sum >= 0:
 		return Money{}, fmt.Errorf("%w: overflow na soma", ErrInvalidAmount)
 	}
 	return Money{amount: sum, currency: m.currency}, nil
