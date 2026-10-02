@@ -24,19 +24,18 @@ type InboxRepository interface {
 	CountAttempts(ctx context.Context, consumer, messageID string) (int, error)
 }
 
-// PostgresInbox é a implementação sobre o Postgres.
-type PostgresInbox struct {
+// inboxRepository é a implementação sobre o banco.
+type inboxRepository struct {
 	db Querier
 }
 
 // NewInboxRepository devolve o repositório de inbox.
-func NewInboxRepository(db Querier) *PostgresInbox {
-	return &PostgresInbox{db: db}
+func NewInboxRepository(db Querier) *inboxRepository {
+	return &inboxRepository{db: db}
 }
 
-// WithTx returns a new repository using the transaction as querier.
 // TryBegin registra a mensagem se ainda não existir.
-func (r *PostgresInbox) TryBegin(ctx context.Context, consumer, messageID, messageHash string, now time.Time) (bool, error) {
+func (r *inboxRepository) TryBegin(ctx context.Context, consumer, messageID, messageHash string, now time.Time) (bool, error) {
 	// Inserção pura: se a linha volta, a mensagem é inédita e o
 	// consumidor deve processá-la.
 	const insert = `
@@ -73,7 +72,7 @@ func (r *PostgresInbox) TryBegin(ctx context.Context, consumer, messageID, messa
 }
 
 // Complete marca a mensagem como processada.
-func (r *PostgresInbox) Complete(ctx context.Context, consumer, messageID string, now time.Time) error {
+func (r *inboxRepository) Complete(ctx context.Context, consumer, messageID string, now time.Time) error {
 	const q = `
 		UPDATE inbox
 		SET completed_at = $3
@@ -94,7 +93,7 @@ func (r *PostgresInbox) Complete(ctx context.Context, consumer, messageID string
 }
 
 // IsCompleted informa se a mensagem já foi processada.
-func (r *PostgresInbox) IsCompleted(ctx context.Context, consumer, messageID string) (bool, error) {
+func (r *inboxRepository) IsCompleted(ctx context.Context, consumer, messageID string) (bool, error) {
 	var concluida sql.NullTime
 	const q = `
 		SELECT completed_at
@@ -112,7 +111,7 @@ func (r *PostgresInbox) IsCompleted(ctx context.Context, consumer, messageID str
 }
 
 // CountAttempts devolve quantas vezes a mensagem foi begun.
-func (r *PostgresInbox) CountAttempts(ctx context.Context, consumer, messageID string) (int, error) {
+func (r *inboxRepository) CountAttempts(ctx context.Context, consumer, messageID string) (int, error) {
 	var tentativas int
 	const q = `
 		SELECT attempts
