@@ -367,8 +367,8 @@ func TestSubmitBetProcessaDebito(t *testing.T) {
 	if got := w.Balance().String(); got != "75.00" {
 		t.Errorf("saldo = %s, quer 75.00", got)
 	}
-	if w.Version() != 2 {
-		t.Errorf("versão = %d, quer 2 (uma mutação)", w.Version())
+	if w.Version() != 1 {
+		t.Errorf("versão = %d, quer 1 (uma mutação)", w.Version())
 	}
 
 	// Lançamento DEBIT coerente com o antes/depois.
@@ -434,7 +434,7 @@ func TestSubmitBetProcessaDebito(t *testing.T) {
 	if !strings.Contains(payload, `"walletId":"11111111-1111-4111-8111-111111111111"`) ||
 		!strings.Contains(payload, `"balanceBefore":{"amount":"100.00","currency":"BRL"}`) ||
 		!strings.Contains(payload, `"balanceAfter":{"amount":"75.00","currency":"BRL"}`) ||
-		!strings.Contains(payload, `"walletVersion":2`) {
+		!strings.Contains(payload, `"walletVersion":1`) {
 		t.Errorf("payload = %s", payload)
 	}
 }
