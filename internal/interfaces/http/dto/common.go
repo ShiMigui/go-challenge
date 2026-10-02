@@ -28,6 +28,8 @@ const (
 	ErrCodeUnavailable         = "UNAVAILABLE"
 	ErrCodeUnauthorized        = "UNAUTHORIZED"
 	ErrCodeForbidden           = "FORBIDDEN"
+	// ErrCodeInternal é o código padrão de falhas não mapeadas.
+	ErrCodeInternal = "INTERNAL_ERROR"
 )
 
 type ErrorResponse struct {
@@ -96,7 +98,7 @@ func ErrForbidden(err error) *DomainError {
 }
 
 func ErrInternal(err error) *DomainError {
-	return NewDomainError(err, 500, "INTERNAL_ERROR")
+	return NewDomainError(err, 500, ErrCodeInternal)
 }
 
 func MapDomainError(err error) *DomainError {
@@ -125,6 +127,12 @@ func MapDomainError(err error) *DomainError {
 	case errors.Is(err, money.ErrCurrencyMismatch):
 		return ErrInvalidInput(err)
 	case errors.Is(err, money.ErrNegativeAmount):
+		return ErrInvalidInput(err)
+	case errors.Is(err, money.ErrInvalidAmount):
+		return ErrInvalidInput(err)
+	case errors.Is(err, money.ErrInvalidCurrency):
+		return ErrInvalidInput(err)
+	case errors.Is(err, money.ErrInvalidFormat):
 		return ErrInvalidInput(err)
 	case errors.Is(err, wager.ErrInvalidAmountForKind):
 		return ErrInvalidInput(err)
