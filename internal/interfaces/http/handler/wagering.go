@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shimigui/go-challenge/internal/application/events"
 	"github.com/shimigui/go-challenge/internal/application/wagering"
 	"github.com/shimigui/go-challenge/internal/domain/identifier"
 	"github.com/shimigui/go-challenge/internal/domain/money"
@@ -45,7 +46,6 @@ func (h *WageringHandler) SubmitTransaction(w http.ResponseWriter, r *http.Reque
 		ProviderID:     req.ProviderID,
 		ExternalID:     req.ExternalTransactionID,
 		IdempotencyKey: idempotencyKey,
-		PayloadHash:    "placeholder-hash",
 		PlayerID:       req.PlayerID,
 		WalletID:       req.WalletID,
 		Kind:           wager.Kind(req.Kind),
@@ -56,18 +56,48 @@ func (h *WageringHandler) SubmitTransaction(w http.ResponseWriter, r *http.Reque
 		Now:            time.Now(),
 	}
 
+	// O hash canônico cobre o conteúdo de negócio, não a embalagem: o mesmo
+	// corpo por HTTP ou por fila produz o mesmo hash, então a idempotência
+	// cruza os transportes.
+	params.PayloadHash, err = events.CanonicalHash(params)
+	if err != nil {
+		middleware.RespondError(w, r, dto.MapDomainError(err))
+		return
+	}
+
 	res, err := h.svc.SubmitTransaction(r.Context(), params)
 	if err != nil {
 		middleware.RespondError(w, r, dto.MapDomainError(err))
 		return
 	}
 
-	middleware.RespondJSON(w, r, http.StatusOK, dto.CreateTransactionResponse{
-		TransactionID:    res.Transaction.ID(),
-		Status:           dto.TransactionState(res.Transaction.State()),
-		Balance:          dto.MoneyPayload{Amount: res.Transaction.Amount().String(), Currency: string(res.Transaction.Currency())},
-		IdempotentReplay: res.Replayed,
-	})
+	resposta := dto.CreateTransactionResponse{
+		TransactionID:        res.Transaction.ID(),
+		Status:               dto.TransactionState(res.Transaction.State()),
+		FailureCode:          res.Transaction.FailureCode(),
+		ReferenceNextAttempt: nilPtr(res.Transaction.ReferenceNextAttempt()),
+		IdempotentReplay:     res.Replayed,
+	}
+	if res.Transaction.HasObservedBalance() {
+		obs := res.Transaction.ObservedBalance()
+		resposta.Balance = &dto.MoneyPayload{Amount: obs.String(), Currency: string(obs.Currency())}
+	}
+
+	// O status HTTP é derivado do estado persistido: aceito (200), aguardando
+	// referência (202) ou recusa por regra de negócio (422).
+	middleware.RespondJSON(w, r, statusDoEstado(res.Transaction.State()), resposta)
+}
+
+// statusDoEstado traduz o estado persistido para o código HTTP da resposta.
+func statusDoEstado(estado wager.State) int {
+	switch estado {
+	case wager.StatePendingReference:
+		return http.StatusAccepted
+	case wager.StateRejected:
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusOK
+	}
 }
 
 func (h *WageringHandler) GetTransaction(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +146,7 @@ func toTransactionResponse(tx *wager.Transaction) dto.TransactionResponse {
 		ExternalTransactionID:          tx.ExternalID(),
 		Money:                          dto.MoneyPayload{Amount: tx.Amount().String(), Currency: string(tx.Currency())},
 		ReferenceExternalTransactionID: tx.ReferenceExternalID(),
+		ObservedBalance:                observedBalancePayload(tx),
 		ReferenceTransactionID:         tx.ReferenceID(),
 		FailureCode:                    tx.FailureCode(),
 		FailureMessage:                 tx.FailureMessage(),
@@ -133,4 +164,14 @@ func nilPtr(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// observedBalancePayload devolve o saldo observado da transação, ou nil
+// quando ela não carrega um (LOSS sem carteira, pendentes e recusas).
+func observedBalancePayload(tx *wager.Transaction) *dto.MoneyPayload {
+	if !tx.HasObservedBalance() {
+		return nil
+	}
+	obs := tx.ObservedBalance()
+	return &dto.MoneyPayload{Amount: obs.String(), Currency: string(obs.Currency())}
 }

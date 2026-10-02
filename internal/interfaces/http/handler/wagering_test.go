@@ -13,7 +13,6 @@ import (
 	"github.com/shimigui/go-challenge/internal/application/wagering"
 	"github.com/shimigui/go-challenge/internal/domain/money"
 	"github.com/shimigui/go-challenge/internal/domain/wager"
-	domainwallet "github.com/shimigui/go-challenge/internal/domain/wallet"
 	"github.com/shimigui/go-challenge/internal/interfaces/http/dto"
 	"github.com/shimigui/go-challenge/internal/interfaces/http/handler"
 	"github.com/shimigui/go-challenge/internal/interfaces/http/middleware"
@@ -68,6 +67,9 @@ func transacaoProcessada() *wager.Transaction {
 	if err != nil {
 		panic(err)
 	}
+	if err := tx.SetObservedBalance(money.MustParse("75.00", money.BRL)); err != nil {
+		panic(err)
+	}
 	if err := tx.MarkProcessed(time.Date(2026, 10, 1, 12, 0, 5, 0, time.UTC)); err != nil {
 		panic(err)
 	}
@@ -103,6 +105,13 @@ func TestSubmitTransactionValida(t *testing.T) {
 			if params.IdempotencyKey != "chave-1" {
 				t.Errorf("idempotencyKey = %q", params.IdempotencyKey)
 			}
+			// O hash canônico é calculado pelo handler, não vem do cliente.
+			if params.PayloadHash == "" || params.PayloadHash == "placeholder-hash" {
+				t.Errorf("payloadHash = %q, esperava hash canônico", params.PayloadHash)
+			}
+			if len(params.PayloadHash) != 64 {
+				t.Errorf("payloadHash = %q, esperava SHA-256 hex", params.PayloadHash)
+			}
 			return &wagering.SubmitResult{Transaction: transacaoProcessada(), Replayed: false}, nil
 		},
 	}
@@ -128,8 +137,11 @@ func TestSubmitTransactionValida(t *testing.T) {
 	if resp.IdempotentReplay {
 		t.Error("primeira submissão não pode ser replay")
 	}
-	if resp.Balance.Amount != "25.00" || resp.Balance.Currency != "BRL" {
-		t.Errorf("balance = %+v", resp.Balance)
+	if resp.Balance == nil || resp.Balance.Amount != "75.00" || resp.Balance.Currency != "BRL" {
+		t.Errorf("balance = %+v, quer saldo observado 75.00", resp.Balance)
+	}
+	if resp.FailureCode != "" {
+		t.Errorf("failureCode = %q, quer vazio", resp.FailureCode)
 	}
 }
 
@@ -180,10 +192,31 @@ func TestSubmitTransactionValorMonetarioInvalido(t *testing.T) {
 	}
 }
 
-func TestSubmitTransactionSaldoInsuficiente(t *testing.T) {
+func TestSubmitTransactionSaldoInsuficienteRejeitaCom422(t *testing.T) {
+	// Saldo insuficiente é recusa por regra de negócio: a transação é
+	// persistida como REJECTED e o provedor recebe 422 com o corpo da
+	// transação — não um envelope de erro.
+	tx, err := wager.NewExternal(wager.ExternalParams{
+		ID:             transacaoUUID,
+		ProviderID:     "provider-1",
+		ExternalID:     "ext-1",
+		IdempotencyKey: "key-1",
+		PayloadHash:    "hash-1",
+		PlayerID:       "player-1",
+		WalletID:       carteiraUUID,
+		Kind:           wager.KindBet,
+		Amount:         money.MustParse("25.00", money.BRL),
+		Now:            time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.MarkRejected("INSUFFICIENT_FUNDS", "saldo insuficiente", time.Date(2026, 10, 1, 12, 0, 5, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	stub := &wageringServiceStub{
 		submit: func(ctx context.Context, params wager.ExternalParams) (*wagering.SubmitResult, error) {
-			return nil, domainwallet.ErrInsufficientFunds
+			return &wagering.SubmitResult{Transaction: tx, Replayed: false}, nil
 		},
 	}
 	h := handler.NewWageringHandler(stub)
@@ -194,13 +227,70 @@ func TestSubmitTransactionSaldoInsuficiente(t *testing.T) {
 
 	middleware.IdempotencyMiddleware(http.HandlerFunc(h.SubmitTransaction)).ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("status = %d, quer 409", rr.Code)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, quer 422. Corpo: %s", rr.Code, rr.Body.String())
 	}
-	var resp dto.ErrorResponse
+	var resp dto.CreateTransactionResponse
 	decodeBody(t, rr, &resp)
-	if resp.Code != dto.ErrCodeInsufficientFunds {
-		t.Errorf("code = %q", resp.Code)
+	if resp.Status != dto.StateRejected {
+		t.Errorf("status = %q, quer REJECTED", resp.Status)
+	}
+	if resp.FailureCode != "INSUFFICIENT_FUNDS" {
+		t.Errorf("failureCode = %q, quer INSUFFICIENT_FUNDS", resp.FailureCode)
+	}
+	if resp.Balance != nil {
+		t.Errorf("balance = %+v, recusa não tem saldo observado", resp.Balance)
+	}
+}
+
+func TestSubmitTransactionPendenciaDeReferenciaRetorna202(t *testing.T) {
+	// Referência ainda não chegou: a operação fica PENDING_REFERENCE e o
+	// provedor recebe 202 com o prazo da próxima tentativa do worker.
+	tx, err := wager.NewExternal(wager.ExternalParams{
+		ID:             transacaoUUID,
+		ProviderID:     "provider-1",
+		ExternalID:     "ext-1",
+		IdempotencyKey: "key-1",
+		PayloadHash:    "hash-1",
+		PlayerID:       "player-1",
+		WalletID:       carteiraUUID,
+		Kind:           wager.KindRefund,
+		Amount:         money.MustParse("25.00", money.BRL),
+		ReferenceExtID: "ext-bet",
+		Now:            time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.AwaitReference(time.Date(2026, 10, 1, 12, 0, 2, 0, time.UTC), time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	stub := &wageringServiceStub{
+		submit: func(ctx context.Context, params wager.ExternalParams) (*wagering.SubmitResult, error) {
+			return &wagering.SubmitResult{Transaction: tx, Replayed: false}, nil
+		},
+	}
+	h := handler.NewWageringHandler(stub)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(submitBetBody))
+	req.Header.Set("Idempotency-Key", "k")
+
+	middleware.IdempotencyMiddleware(http.HandlerFunc(h.SubmitTransaction)).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, quer 202. Corpo: %s", rr.Code, rr.Body.String())
+	}
+	var resp dto.CreateTransactionResponse
+	decodeBody(t, rr, &resp)
+	if resp.Status != dto.StatePendingReference {
+		t.Errorf("status = %q, quer PENDING_REFERENCE", resp.Status)
+	}
+	if resp.ReferenceNextAttempt == nil {
+		t.Error("referenceNextAttempt deveria estar presente")
+	}
+	if resp.Balance != nil {
+		t.Errorf("balance = %+v, pendência não tem saldo observado", resp.Balance)
 	}
 }
 
@@ -232,12 +322,31 @@ func TestSubmitTransactionReentrega(t *testing.T) {
 	}
 }
 
-func TestSubmitTransactionReversaoInvalidaRetorna400(t *testing.T) {
-	// ROLLBACK sem referência resolvida recusa o movimento — o contrato de
-	// erro é 400 (INVALID_INPUT), não 500.
+func TestSubmitTransactionReversaoSemReferenciaRetorna202(t *testing.T) {
+	// ROLLBACK sem referência resolvida não é erro: a operação espera em
+	// PENDING_REFERENCE (202) e o worker retoma quando a referência chega.
+	tx, err := wager.NewExternal(wager.ExternalParams{
+		ID:             transacaoUUID,
+		ProviderID:     "provider-1",
+		ExternalID:     "ext-1",
+		IdempotencyKey: "key-1",
+		PayloadHash:    "hash-1",
+		PlayerID:       "player-1",
+		WalletID:       carteiraUUID,
+		Kind:           wager.KindRollback,
+		Amount:         money.MustParse("25.00", money.BRL),
+		ReferenceExtID: "ext-bet",
+		Now:            time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.AwaitReference(time.Date(2026, 10, 1, 12, 0, 2, 0, time.UTC), time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	stub := &wageringServiceStub{
 		submit: func(ctx context.Context, params wager.ExternalParams) (*wagering.SubmitResult, error) {
-			return nil, wager.ErrInvalidKind
+			return &wagering.SubmitResult{Transaction: tx, Replayed: false}, nil
 		},
 	}
 	h := handler.NewWageringHandler(stub)
@@ -248,8 +357,13 @@ func TestSubmitTransactionReversaoInvalidaRetorna400(t *testing.T) {
 
 	middleware.IdempotencyMiddleware(http.HandlerFunc(h.SubmitTransaction)).ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, quer 400", rr.Code)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, quer 202", rr.Code)
+	}
+	var resp dto.CreateTransactionResponse
+	decodeBody(t, rr, &resp)
+	if resp.Status != dto.StatePendingReference {
+		t.Errorf("status = %q, quer PENDING_REFERENCE", resp.Status)
 	}
 }
 
@@ -282,6 +396,9 @@ func TestGetTransactionValida(t *testing.T) {
 	}
 	if resp.Money.Amount != "25.00" || resp.PlayerID != "player-1" {
 		t.Errorf("money/player = %+v / %q", resp.Money, resp.PlayerID)
+	}
+	if resp.ObservedBalance == nil || resp.ObservedBalance.Amount != "75.00" {
+		t.Errorf("observedBalance = %+v, quer 75.00", resp.ObservedBalance)
 	}
 	if resp.ProcessedAt == nil || resp.ProcessedAt.IsZero() {
 		t.Error("processedAt deveria estar presente")

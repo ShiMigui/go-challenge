@@ -38,10 +38,12 @@ type CreateTransactionRequest struct {
 }
 
 type CreateTransactionResponse struct {
-	TransactionID    string           `json:"transactionId"`
-	Status           TransactionState `json:"status"`
-	Balance          MoneyPayload     `json:"balance"`
-	IdempotentReplay bool             `json:"idempotentReplay"`
+	TransactionID        string           `json:"transactionId"`
+	Status               TransactionState `json:"status"`
+	Balance              *MoneyPayload    `json:"balance,omitempty"`
+	FailureCode          string           `json:"failureCode,omitempty"`
+	ReferenceNextAttempt *time.Time       `json:"referenceNextAttempt,omitempty"`
+	IdempotentReplay     bool             `json:"idempotentReplay"`
 }
 
 type TransactionResponse struct {
@@ -55,6 +57,7 @@ type TransactionResponse struct {
 	ProviderID                     string           `json:"providerId,omitempty"`
 	ExternalTransactionID          string           `json:"externalTransactionId,omitempty"`
 	Money                          MoneyPayload     `json:"money"`
+	ObservedBalance                *MoneyPayload    `json:"observedBalance,omitempty"`
 	ReferenceExternalTransactionID string           `json:"referenceExternalTransactionId,omitempty"`
 	ReferenceTransactionID         string           `json:"referenceTransactionId,omitempty"`
 	FailureCode                    string           `json:"failureCode,omitempty"`
