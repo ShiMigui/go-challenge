@@ -23,8 +23,11 @@ type LedgerRepository interface {
 	// O par (wallet, transaction) é único, então há no máximo um.
 	FindByTransaction(ctx context.Context, transactionID string) (*ledger.Entry, error)
 	// ListByWallet devolve o extrato da carteira, do mais novo para o mais
-	// antigo.
+	// antigo, com paginação.
 	ListByWallet(ctx context.Context, walletID string, limite int) ([]*ledger.Entry, error)
+	// ListByWalletAll devolve todos os lançamentos da carteira, do mais
+	// novo para o mais antigo, sem paginação.
+	ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error)
 }
 
 // PostgresLedger é a implementação sobre o Postgres.
@@ -33,8 +36,13 @@ type PostgresLedger struct {
 }
 
 // NewLedgerRepository devolve o repositório de ledger.
-func NewLedgerRepository(db Querier) *PostgresLedger {
+func NewLedgerRepository(db Querier) LedgerRepository {
 	return &PostgresLedger{db: db}
+}
+
+// NewLedgerRepositoryWithTx creates a repository bound to the given transaction.
+func NewLedgerRepositoryWithTx(tx *sql.Tx) LedgerRepository {
+	return &PostgresLedger{db: tx}
 }
 
 // Append grava o lançamento.
@@ -106,6 +114,33 @@ func (r *PostgresLedger) ListByWallet(ctx context.Context, walletID string, limi
 		LIMIT $2
 	`
 	rows, err := r.db.QueryContext(ctx, q, walletID, limite)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var saida []*ledger.Entry
+	for rows.Next() {
+		e, err := scanLedger(rows)
+		if err != nil {
+			return nil, err
+		}
+		saida = append(saida, e)
+	}
+	return saida, rows.Err()
+}
+
+// ListByWalletAll devolve todos os lançamentos da carteira, sem paginação.
+func (r *PostgresLedger) ListByWalletAll(ctx context.Context, walletID string) ([]*ledger.Entry, error) {
+	if err := validUUID("wallet_id", walletID); err != nil {
+		return nil, err
+	}
+	const q = `
+		SELECT ` + ledgerColumns + `
+		FROM wallet_ledger_entries
+		WHERE wallet_id = $1
+		ORDER BY created_at DESC, id DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q, walletID)
 	if err != nil {
 		return nil, err
 	}
