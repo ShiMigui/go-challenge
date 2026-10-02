@@ -34,6 +34,7 @@ func NewInboxRepository(db Querier) *PostgresInbox {
 	return &PostgresInbox{db: db}
 }
 
+// WithTx returns a new repository using the transaction as querier.
 // TryBegin registra a mensagem se ainda não existir.
 func (r *PostgresInbox) TryBegin(ctx context.Context, consumer, messageID, messageHash string, now time.Time) (bool, error) {
 	// Inserção pura: se a linha volta, a mensagem é inédita e o
