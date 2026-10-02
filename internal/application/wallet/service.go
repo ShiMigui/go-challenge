@@ -104,9 +104,12 @@ func (s *service) Reconcile(ctx context.Context, walletID string) (*Reconciliati
 		return nil, err
 	}
 
-	calculated, err := sumEntries(entries)
-	if err != nil {
-		return nil, err
+	calculated := money.Zero(wlt.Currency())
+	if len(entries) > 0 {
+		calculated, err = sumEntries(entries)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	diff, err := wlt.Balance().Sub(calculated)
@@ -126,8 +129,14 @@ func (s *service) Reconcile(ctx context.Context, walletID string) (*Reconciliati
 
 // sumEntries soma os lançamentos com sinal, reconstruindo o saldo do
 // ledger para a reconciliação.
+//
+// A soma começa em zero na moeda do primeiro lançamento: somar valores
+// sempre preserva a moeda da carteira, já que o ledger é todo na mesma moeda.
 func sumEntries(entries []*ledger.Entry) (money.Money, error) {
-	var total money.Money
+	if len(entries) == 0 {
+		return money.Money{}, nil
+	}
+	total := money.Zero(entries[0].Amount().Currency())
 	for _, e := range entries {
 		signed, err := e.SignedAmount()
 		if err != nil {
