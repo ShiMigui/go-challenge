@@ -5,14 +5,17 @@ import (
 	"database/sql"
 )
 
+// TransactionManager defines the interface for running code in a transaction.
+type TransactionManager interface {
+	WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error
+}
+
 // TransactionRepository dá acesso ao banco transacional.
 //
 // Existe separada do Querier porque BeginTx exige *sql.DB: um *sql.Tx
 // não abre transação aninhada. Um repositório com Querier aceita os dois,
 // mas o ponto de entrada da transação não.
 type TransactionRepository interface {
-	// WithTx roda fn dentro de uma transação, commitando se ela voltar
-	// sem erro e fazendo rollback em caso contrário.
 	WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error
 }
 
@@ -33,8 +36,6 @@ func (r *PostgresTransaction) WithTx(ctx context.Context, fn func(tx *sql.Tx) er
 		return err
 	}
 	if err := fn(tx); err != nil {
-		// O erro da função é mais interessante que o do rollback: é
-		// ele que explica a falha para quem chamou.
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
 			return rollbackErr
 		}
