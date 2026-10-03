@@ -1,5 +1,7 @@
 // Command api é o entrypoint da aplicação: monta o grafo Fx a partir do
 // bootstrap e o roda até o encerramento.
+// As migrations são aplicadas automaticamente pelo container postgres
+// durante a inicialização do banco (scripts/postgres/Dockerfile).
 package main
 
 import (

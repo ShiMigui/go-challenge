@@ -3,7 +3,6 @@
 package persistence
 
 import (
-	"context"
 	"database/sql"
 
 	"go.uber.org/fx"
@@ -16,6 +15,7 @@ import (
 )
 
 // Module expõe os ports de persistência para o grafo Fx.
+// Migrations são rodadas em cmd/api/main.go ANTES de subir o Fx app.
 var Module = fx.Module("persistence",
 	fx.Provide(
 		OpenDB,
@@ -37,17 +37,10 @@ var Module = fx.Module("persistence",
 		},
 		func(db *sql.DB) *MigrationRunner {
 			path := "./scripts/postgres/migrations"
+			// No Fx module não temos a connStr, usamos o construtor padrão
+			// A connStr será lida da env var DATABASE_URL no migrateInstance
 			return NewMigrationRunner(db, path)
 		},
 	),
-	fx.Invoke(runMigrationsOnStart),
+	// runMigrationsOnStart removido: migrations rodam em main.go antes do Fx
 )
-
-// runMigrationsOnStart roda migrations automaticamente na inicialização.
-func runMigrationsOnStart(lc fx.Lifecycle, runner *MigrationRunner) {
-	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			return runner.Up(ctx)
-		},
-	})
-}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -16,14 +17,31 @@ import (
 // MigrationRunner gerencia aplicação e reversão de migrations PostgreSQL.
 type MigrationRunner struct {
 	db             *sql.DB
+	connStr        string
 	migrationsPath string
 }
 
 // NewMigrationRunner cria um runner apontando para o diretório de migrations.
 // Aceita *sql.DB padrão (database/sql) para compatibilidade com fx.Module.
 func NewMigrationRunner(db *sql.DB, migrationsPath string) *MigrationRunner {
+	// Extrai connection string do pool
+	var connStr string
+	if cfg := db.Driver(); cfg != nil {
+		// Não há como extrair connStr do *sql.DB diretamente
+		// Usaremos variável de ambiente ou fallback
+	}
 	return &MigrationRunner{
 		db:             db,
+		connStr:        connStr,
+		migrationsPath: migrationsPath,
+	}
+}
+
+// NewMigrationRunnerWithConnStr cria um runner com connection string explícita.
+func NewMigrationRunnerWithConnStr(db *sql.DB, connStr, migrationsPath string) *MigrationRunner {
+	return &MigrationRunner{
+		db:             db,
+		connStr:        connStr,
 		migrationsPath: migrationsPath,
 	}
 }
@@ -41,7 +59,11 @@ func NewMigrationRunnerFromPool(db interface{}, migrationsPath string) *Migratio
 // migrateInstance cria uma instância do migrate conectada ao banco.
 func (r *MigrationRunner) migrateInstance() (*migrate.Migrate, error) {
 	// golang-migrate precisa de connection string postgres
-	connStr := os.Getenv("DATABASE_URL")
+	connStr := r.connStr
+	if connStr == "" {
+		// Fallback para env var
+		connStr = os.Getenv("DATABASE_URL")
+	}
 	if connStr == "" {
 		// Default local
 		connStr = "postgres://wagering:wagering@localhost:5432/wagering?sslmode=disable"
@@ -190,4 +212,78 @@ func RunMigrationsFromMain(ctx context.Context) error {
 
 	runner := NewMigrationRunner(db, migrationsPath)
 	return runner.Up(ctx)
+}
+
+// UpWithRetry aplica migrations com retry inteligente.
+// Verifica se as tabelas principais já existem; se não, espera e tenta novamente.
+// Útil para startup da API onde o DB pode não estar totalmente pronto.
+func (r *MigrationRunner) UpWithRetry(ctx context.Context, maxRetries int, baseDelay time.Duration) error {
+	if maxRetries <= 0 {
+		maxRetries = 30 // ~2.5 minutos com delay base 5s
+	}
+	if baseDelay <= 0 {
+		baseDelay = 5 * time.Second
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Tenta conectar e verificar se schema existe
+		if err := r.checkSchemaExists(ctx); err != nil {
+			if attempt == maxRetries {
+				return fmt.Errorf("schema check failed after %d retries: %w", maxRetries, err)
+			}
+			time.Sleep(baseDelay)
+			continue
+		}
+
+		// Schema existe, tenta aplicar migrations
+		if err := r.Up(ctx); err != nil {
+			if attempt == maxRetries {
+				return fmt.Errorf("migrate up failed after %d retries: %w", maxRetries, err)
+			}
+			time.Sleep(baseDelay)
+			continue
+		}
+
+		return nil // Sucesso
+	}
+
+	return fmt.Errorf("max retries exceeded")
+}
+
+// checkSchemaExists verifica se as tabelas principais do schema existem.
+// Retorna nil se existem, erro se não existem ou erro de conexão.
+// Usa a conexão existente do pool (r.db) em vez de abrir nova conexão.
+func (r *MigrationRunner) checkSchemaExists(ctx context.Context) error {
+	// Timeout curto para check
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := r.db.PingContext(checkCtx); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+
+	// Verifica se tabela 'wallets' existe (primeira migration)
+	var exists bool
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables 
+			WHERE table_schema = 'public' AND table_name = 'wallets'
+		)
+	`
+	err := r.db.QueryRowContext(checkCtx, query).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("query schema: %w", err)
+	}
+
+	if !exists {
+		return fmt.Errorf("schema not initialized (wallets table missing)")
+	}
+
+	return nil
 }
