@@ -3,6 +3,7 @@
 package persistence
 
 import (
+	"context"
 	"database/sql"
 
 	"go.uber.org/fx"
@@ -15,10 +16,6 @@ import (
 )
 
 // Module expõe os ports de persistência para o grafo Fx.
-//
-// Os construtores aceitam *sql.DB (que implementa Querier) e ficam
-// prontos para as leituras fora de transação; a escrita transacional
-// nasce do ports.TransactionManager.
 var Module = fx.Module("persistence",
 	fx.Provide(
 		OpenDB,
@@ -38,5 +35,19 @@ var Module = fx.Module("persistence",
 		func(db *sql.DB) ports.InboxRepository {
 			return NewInboxRepository(db)
 		},
+		func(db *sql.DB) *MigrationRunner {
+			path := "./scripts/postgres/migrations"
+			return NewMigrationRunner(db, path)
+		},
 	),
+	fx.Invoke(runMigrationsOnStart),
 )
+
+// runMigrationsOnStart roda migrations automaticamente na inicialização.
+func runMigrationsOnStart(lc fx.Lifecycle, runner *MigrationRunner) {
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			return runner.Up(ctx)
+		},
+	})
+}
