@@ -75,16 +75,7 @@ func (c *Consumer) loop(ctx context.Context) {
 // receiveMessages simula a obtenção de mensagens da fila SQS.
 // Em produção, isto chamaria client.ReceiveMessageContext.
 func (c *Consumer) receiveMessages(ctx context.Context) []sqsMessage {
-	// Por enquanto, retorna mensagens de um canal interno ou vazio.
-	// O teste pode injetar mensagens via SetTestMessages.
 	return nil
-}
-
-// setTestMessages injeta mensagens para testes (apenas para este pacote).
-var testMessages chan sqsMessage
-
-func setTestMessagesFn(ch chan sqsMessage) {
-	testMessages = ch
 }
 
 // sqsMessage representa uma mensagem recebida da fila SQS.

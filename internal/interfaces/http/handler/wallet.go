@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/shimigui/go-challenge/internal/application/wallet"
@@ -77,7 +78,9 @@ func (h *WalletHandler) GetLedger(w http.ResponseWriter, r *http.Request) {
 	cursor := r.URL.Query().Get("cursor")
 	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
-		// parse limit
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
 	}
 
 	var c *string

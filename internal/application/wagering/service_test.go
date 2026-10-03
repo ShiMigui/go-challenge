@@ -333,9 +333,6 @@ func assertSemMovimento(t *testing.T, h *memTxManager) {
 
 const novxs = "22222222-2222-4222-8222-222222222222"
 
-// refUUID é a identidade da transação referenciada nos testes.
-const refUUID = "33333333-3333-4333-8333-333333333333"
-
 // ===== BET (débito) =====
 
 func TestSubmitBetProcessaDebito(t *testing.T) {

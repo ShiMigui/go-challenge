@@ -26,9 +26,6 @@ var (
 	ErrInvalidFormat = errors.New("formato monetario invalido")
 )
 
-// scale é o número de casas decimais com que a moeda é operada.
-const scale = 2
-
 // Money é um valor exato em unidades mínimas, sempre com a moeda.
 //
 // O valor zero de Money não é um valor monetário: use New ou Parse.

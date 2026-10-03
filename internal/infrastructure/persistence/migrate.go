@@ -23,16 +23,11 @@ type MigrationRunner struct {
 
 // NewMigrationRunner cria um runner apontando para o diretório de migrations.
 // Aceita *sql.DB padrão (database/sql) para compatibilidade com fx.Module.
+// A connStr será lida da env var DATABASE_URL no migrateInstance.
 func NewMigrationRunner(db *sql.DB, migrationsPath string) *MigrationRunner {
-	// Extrai connection string do pool
-	var connStr string
-	if cfg := db.Driver(); cfg != nil {
-		// Não há como extrair connStr do *sql.DB diretamente
-		// Usaremos variável de ambiente ou fallback
-	}
 	return &MigrationRunner{
 		db:             db,
-		connStr:        connStr,
+		connStr:        "",
 		migrationsPath: migrationsPath,
 	}
 }
