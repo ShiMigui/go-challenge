@@ -1,128 +1,128 @@
-# ARCHITECTURE.md — Decisões de Arquitetura
+# ARCHITECTURE.md — Architecture Decisions
 
-Este documento registra as decisões técnicas tomadas na implementação do desafio de processamento distribuído de apostas.
-
----
-
-## 1. Representação de Dinheiro (`Money`)
-
-### Escolha: `int64` em unidades mínimas (centavos)
-
-- **Por que não `float32/float64`**: Ponto flutuante introduz erros de arredondamento inaceitáveis em finanças (ex: `0.1 + 0.2 != 0.3`).
-- **Por que não `NUMERIC`/`DECIMAL` no banco**: Aritmética em Go e no banco seriam operações diferentes, exigindo conversões e risco de divergência. Com `BIGINT` (unidades mínimas), a soma em Go (`a + b`) é a mesma operação que `a + b` no SQL.
-- **Escala fixa**: 2 casas decimais (centavos). Código de moeda ISO 4217 (`CHAR(3)`).
-- **Parsing**: Rejeita vazios, `NaN`, `Infinity`, notação científica, escala excedente (>2 casas), negativos em entradas externas.
-- **Overflow**: Verificado no parsing, soma, subtração e negação (`math.MaxInt64` / `math.MinInt64`).
-- **Moeda**: Carregada no value object. Operações aritméticas e comparação exigem moedas iguais (`ErrCurrencyMismatch`).
-- **Testes de incompatibilidade**: Incluídos nos testes unitários (`money_test.go`).
-
-**Limite**: `int64` suporta até ±9.223.372.036.854,77 (92 quatrilhões) — suficiente para volumes reais em centavos.
+This document records the technical decisions made in implementing the distributed wagering processing challenge.
 
 ---
 
-## 2. Transações SQL e Delimitação
+## 1. Money Representation (`Money`)
 
-### Estratégia: Transação única por operação de domínio
+### Choice: `int64` in minor units (cents)
 
-Cada caso de uso (ex: `SubmitTransaction`, `CreateWallet`) executa em **uma única transação `pgx.Tx`** que abrange:
+- **Why not `float32/float64`**: Floating point introduces rounding errors that are unacceptable in finance (e.g., `0.1 + 0.2 != 0.3`).
+- **Why not `NUMERIC`/`DECIMAL` in the database**: Arithmetic in Go and in the database would be different operations, requiring conversions and risking divergence. With `BIGINT` (minor units), the sum in Go (`a + b`) is the same operation as `a + b` in SQL.
+- **Fixed scale**: 2 decimal places (cents). ISO 4217 currency code (`CHAR(3)`).
+- **Parsing**: Rejects empty values, `NaN`, `Infinity`, scientific notation, excess scale (>2 decimal places), and negatives in external inputs.
+- **Overflow**: Checked during parsing, addition, subtraction, and negation (`math.MaxInt64` / `math.MinInt64`).
+- **Currency**: Carried in the value object. Arithmetic operations and comparison require identical currencies (`ErrCurrencyMismatch`).
+- **Mismatch tests**: Included in the unit tests (`money_test.go`).
 
-1. Alterações de domínio (`wallets`, `wager_transactions`)
+**Limit**: `int64` supports up to ±9,223,372,036,854.77 (92 quadrillion) — enough for real volumes in cents.
+
+---
+
+## 2. SQL Transactions and Delimitation
+
+### Strategy: Single transaction per domain operation
+
+Each use case (e.g., `SubmitTransaction`, `CreateWallet`) runs in **a single `pgx.Tx` transaction** covering:
+
+1. Domain changes (`wallets`, `wager_transactions`)
 2. Ledger (`wallet_ledger_entries`)
-3. Inbox (se entrada SQS)
-4. Outbox (eventos de integração)
+3. Inbox (if SQS input)
+4. Outbox (integration events)
 
-**Nenhum commit intermediário** — ou tudo confirma ou nada. Isso garante atomicidade financeira e que eventos só saem após o commit (requisito 7.4).
+**No intermediate commits** — either everything commits or nothing does. This guarantees financial atomicity and that events are only emitted after the commit (requirement 7.4).
 
-### Repositórios
+### Repositories
 
-- Repositórios recebem `pgx.Tx` (ou `Querier` genérico) — não abrem/fecham transações.
-- Caso de uso (service) controla `Begin`/`Commit`/`Rollback` via `pgx.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})`.
-- `RepeatableRead` + compare-and-set na versão da carteira impede lost updates sem lock de linha longo.
+- Repositories receive `pgx.Tx` (or a generic `Querier`) — they do not open/close transactions.
+- The use case (service) controls `Begin`/`Commit`/`Rollback` via `pgx.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})`.
+- `RepeatableRead` + compare-and-set on the wallet version prevents lost updates without long row locks.
 
 ---
 
-## 3. Idempotência Persistente
+## 3. Persistent Idempotency
 
-### Duas chaves, ambas persistidas no banco
+### Two keys, both persisted in the database
 
-| Chave | Tabela | Unique Constraint |
+| Key | Table | Unique Constraint |
 |---|---|---|
-| `(provider_id, external_transaction_id)` | `wager_transactions` | Impede reprocessar a mesma operação externa |
-| `(provider_id, idempotency_key)` | `wager_transactions` | Impede reuso de chave com payload diferente |
+| `(provider_id, external_transaction_id)` | `wager_transactions` | Prevents reprocessing the same external operation |
+| `(provider_id, idempotency_key)` | `wager_transactions` | Prevents reusing a key with a different payload |
 
-### Hash canônico do payload
+### Canonical payload hash
 
-- JSON canônico (chaves ordenadas, sem espaços) dos **campos de negócio**.
-- Exclui: `idempotency_key`, metadados de transporte (headers, envelope SQS).
-- Mesmo payload por HTTP ou SQS → mesmo hash → mesma deduplicação.
-- Conflito de hash na mesma `idempotency_key` → `409 IDEMPOTENCY_CONFLICT`.
+- Canonical JSON (sorted keys, no whitespace) of the **business fields**.
+- Excludes: `idempotency_key`, transport metadata (headers, SQS envelope).
+- Same payload over HTTP or SQS → same hash → same deduplication.
+- Hash conflict on the same `idempotency_key` → `409 IDEMPOTENCY_CONFLICT`.
 
 ### Replay
 
-- Mesmo `idempotency_key` + mesmo payload → retorna resultado persistido com `idempotentReplay: true` e **saldo observado no processamento original** (não o saldo atual).
-- Persistido em `wager_transactions.observed_balance` no momento do processamento.
+- Same `idempotency_key` + same payload → returns the persisted result with `idempotentReplay: true` and the **balance observed during the original processing** (not the current balance).
+- Persisted in `wager_transactions.observed_balance` at processing time.
 
 ### SQS
 
-- `data.idempotencyKey` no payload da mensagem.
-- Inbox adiciona dedup por `(consumer_name, message_id)` + hash da mensagem.
-- Dupla proteção: aplicação (idempotency_key) + infraestrutura (inbox).
+- `data.idempotencyKey` in the message payload.
+- Inbox adds dedup by `(consumer_name, message_id)` + message hash.
+- Double protection: application (idempotency_key) + infrastructure (inbox).
 
 ---
 
-## 4. Controle de Concorrência (Carteiras)
+## 4. Concurrency Control (Wallets)
 
-### Estratégia: Otimista com versão + Compare-and-Set
+### Strategy: Optimistic with version + Compare-and-Set
 
-- `wallets.version` inicia em `1`, incrementada **apenas** quando `balance` muda.
-- Trigger `wallets_bump_version` (`BEFORE UPDATE`) incrementa versão e atualiza `updated_at` automaticamente.
-- Escrita no back: `UPDATE wallets SET balance = $novo WHERE id = $id AND version = $lida`
-- Se 0 linhas → conflito → retry com leitura nova (máx. 3 tentativas, backoff curto).
-- **Lock pessimista (`SELECT FOR UPDATE`) NÃO usado** — permite carteiras independentes avançarem em paralelo (requisito 7.6).
+- `wallets.version` starts at `1` and is incremented **only** when `balance` changes.
+- Trigger `wallets_bump_version` (`BEFORE UPDATE`) increments the version and updates `updated_at` automatically.
+- Write-back: `UPDATE wallets SET balance = $novo WHERE id = $id AND version = $lida`
+- If 0 rows → conflict → retry with a fresh read (max 3 attempts, short backoff).
+- **Pessimistic lock (`SELECT FOR UPDATE`) NOT used** — allows independent wallets to progress in parallel (requirement 7.6).
 
-### Teste obrigatório validado
+### Required test validated
 
-> Carteira com 100.00 BRL recebe duas apostas de 80.00 BRL simultâneas.
-> Resultado: uma `PROCESSED`, uma `REJECTED` (INSUFFICIENT_FUNDS), saldo final 20.00, um único débito no ledger.
+> A wallet with 100.00 BRL receives two simultaneous 80.00 BRL bets.
+> Result: one `PROCESSED`, one `REJECTED` (INSUFFICIENT_FUNDS), final balance 20.00, a single debit in the ledger.
 
-Executado em `internal/application/wagering/concurrency_test.go` com 3 instâncias paralelas.
-
----
-
-## 5. Referências Pendentes (`PENDING_REFERENCE`)
-
-### Fluxo
-
-1. `REFUND`/`ROLLBACK` chega antes da referência → persiste como `PENDING_REFERENCE`, `reference_transaction_id = NULL`.
-2. Worker de referências (background) faz polling em `wager_transactions` com `state = 'PENDING_REFERENCE'` e `reference_next_attempt_at <= now()`.
-3. Resolve `reference_external_transaction_id` → `reference_transaction_id` (FK interna).
-4. Se referência `PROCESSED` → aplica reversão.
-5. Se referência `REJECTED`/`FAILED` → rejeita a reversão com `REFERENCE_NOT_PROCESSED`.
-6. Backoff exponencial: `2s, 4s, 8s, 16s, 32s...` (máx 5 min).
-7. Máximo de tentativas: **10** (configurável). Após esgotar → `REJECTED` com `REFERENCE_NOT_FOUND`.
-
-### Persistência da espera
-
-- A inbox da mensagem SQS pode ser concluída (`completed_at` preenchido) assim que a pendência está durável.
-- O worker de referências assume a continuidade — não há perda se o processo morrer.
+Executed in `internal/application/wagering/concurrency_test.go` with 3 parallel instances.
 
 ---
 
-## 6. Reversões (`REFUND` / `ROLLBACK`)
+## 5. Pending References (`PENDING_REFERENCE`)
 
-### Regras
+### Flow
 
-| Tipo | Movimento | Referência obrigatória? | Valor |
+1. `REFUND`/`ROLLBACK` arrives before the reference → persisted as `PENDING_REFERENCE`, `reference_transaction_id = NULL`.
+2. Reference worker (background) polls `wager_transactions` with `state = 'PENDING_REFERENCE'` and `reference_next_attempt_at <= now()`.
+3. Resolves `reference_external_transaction_id` → `reference_transaction_id` (internal FK).
+4. If the reference is `PROCESSED` → applies the reversal.
+5. If the reference is `REJECTED`/`FAILED` → rejects the reversal with `REFERENCE_NOT_PROCESSED`.
+6. Exponential backoff: `2s, 4s, 8s, 16s, 32s...` (max 5 min).
+7. Maximum attempts: **10** (configurable). Once exhausted → `REJECTED` with `REFERENCE_NOT_FOUND`.
+
+### Persistence of the wait
+
+- The SQS message inbox can be completed (`completed_at` filled in) as soon as the pending item is durable.
+- The reference worker takes over continuity — nothing is lost if the process dies.
+
+---
+
+## 6. Reversals (`REFUND` / `ROLLBACK`)
+
+### Rules
+
+| Type | Movement | Mandatory reference? | Amount |
 |---|---|---|---|
-| `REFUND` | Crédito | Sim (`referenceExternalTransactionId`) | Igual ao da `BET` referenciada |
-| `ROLLBACK` | Débito (contrário ao original) | Sim | Igual ao da operação referenciada |
+| `REFUND` | Credit | Yes (`referenceExternalTransactionId`) | Equal to the referenced `BET` |
+| `ROLLBACK` | Debit (opposite of the original) | Yes | Equal to the referenced operation |
 
-### Validações
+### Validations
 
-- Mesma `provider_id`, `player_id`, `wallet_id`, `currency`, `round_id`.
-- Valor **exatamente igual** ao da referência (reversão parcial não permitida).
-- Referência deve estar `PROCESSED`.
-- Índice único parcial impede dois `REFUND` (ou dois `ROLLBACK`) bem-sucedidos na mesma referência:
+- Same `provider_id`, `player_id`, `wallet_id`, `currency`, `round_id`.
+- Amount **exactly equal** to the reference's (partial reversal not allowed).
+- The reference must be `PROCESSED`.
+- A partial unique index prevents two successful `REFUND` (or two `ROLLBACK`) operations on the same reference:
   ```sql
   CREATE UNIQUE INDEX wager_tx_single_successful_reversal_per_type_uniq
       ON wager_transactions (reference_transaction_id, kind)
@@ -130,7 +130,7 @@ Executado em `internal/application/wagering/concurrency_test.go` com 3 instânci
         AND state = 'PROCESSED'
         AND kind IN ('REFUND', 'ROLLBACK');
   ```
-- `ROLLBACK` que precisaria debitar mais que o saldo → `REJECTED` com `INSUFFICIENT_FUNDS_ON_REVERSAL` (código diferente de `INSUFFICIENT_FUNDS` de `BET`).
+- A `ROLLBACK` that would need to debit more than the balance → `REJECTED` with `INSUFFICIENT_FUNDS_ON_REVERSAL` (a different code from `BET`'s `INSUFFICIENT_FUNDS`).
 
 ---
 
@@ -138,72 +138,72 @@ Executado em `internal/application/wagering/concurrency_test.go` com 3 instânci
 
 ### Inbox
 
-- Tabela `inbox`: `(consumer_name, message_id)` unique.
-- `message_hash` valida integridade em reentregas.
-- Gravada **na mesma transação** do domínio + ledger + outbox.
-- Mensagem removida da fila SQS **após commit**.
-- `PENDING_REFERENCE`: inbox concluída ao persistir a pendência; worker de referências continua.
+- Table `inbox`: `(consumer_name, message_id)` unique.
+- `message_hash` validates integrity on redeliveries.
+- Written **in the same transaction** as the domain + ledger + outbox.
+- Message removed from the SQS queue **after commit**.
+- `PENDING_REFERENCE`: inbox completed when the pending item is persisted; the reference worker continues.
 
 ### Outbox
 
-- Tabela `outbox`: `id` = `eventId` estável (UUID v7), `payload` = snapshot JSONB imutável.
-- Escrita na mesma transação do domínio.
-- Worker separado publica (polling em `published_at IS NULL` ordenado por `next_attempt_at`).
-- **Disputa por registro**: `locked_by` + `locked_at` (par consistente). Worker que morre deixa lock expirar; outra instância retoma.
-- Backoff: exponencial com jitter, máx 5 min.
-- Republicação preserva `eventId` → consumidor downstream deduplica.
+- Table `outbox`: `id` = stable `eventId` (UUID v7), `payload` = immutable JSONB snapshot.
+- Written in the same transaction as the domain.
+- A separate worker publishes (polling `published_at IS NULL` ordered by `next_attempt_at`).
+- **Per-record claim**: `locked_by` + `locked_at` (consistent pair). A worker that dies leaves the lock to expire; another instance resumes.
+- Backoff: exponential with jitter, max 5 min.
+- Republishing preserves the `eventId` → downstream consumer deduplicates.
 
-### Eventos publicados
+### Published events
 
-| Evento | Gatilho | Payload chave |
+| Event | Trigger | Key payload |
 |---|---|---|
-| `WagerTransactionProcessed` | Conclusão bem-sucedida (inclui `LOSS`) | `transactionId`, `kind`, `state`, `balance`, `walletVersion` |
-| `WagerTransactionRejected` | Rejeição definitiva por regra de negócio | `transactionId`, `failureCode`, `failureMessage` |
-| `WalletBalanceChanged` | Alteração efetiva do saldo | `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter`, `walletVersion` |
-| `WagerTransactionPendingReference` | Registro de espera pela referência | `transactionId`, `referenceExternalTransactionId`, `referenceNextAttemptAt` |
+| `WagerTransactionProcessed` | Successful completion (includes `LOSS`) | `transactionId`, `kind`, `state`, `balance`, `walletVersion` |
+| `WagerTransactionRejected` | Definitive rejection by a business rule | `transactionId`, `failureCode`, `failureMessage` |
+| `WalletBalanceChanged` | Effective balance change | `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter`, `walletVersion` |
+| `WagerTransactionPendingReference` | Record of waiting for the reference | `transactionId`, `referenceExternalTransactionId`, `referenceNextAttemptAt` |
 
-Envelope: `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (opcional), `occurredAt` (RFC3339 UTC), `version`, `data` tipado.
+Envelope: `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` (optional), `occurredAt` (RFC3339 UTC), `version`, typed `data`.
 
 ---
 
-## 8. Autenticação e Autorização
+## 8. Authentication and Authorization
 
 ### IdP: Keycloak (Docker Compose)
 
 - Realm `wagering`, clients: `wagering-api` (confidential), `provider-a`, `provider-b`, `wagering-internal`.
-- Fluxo: `client_credentials` para serviços; tokens JWT RS256.
-- Validação: JWKS do Keycloak, verifica `iss`, `aud`, `exp`, `nbf`, assinatura.
+- Flow: `client_credentials` for services; RS256 JWT tokens.
+- Validation: Keycloak JWKS, verifies `iss`, `aud`, `exp`, `nbf`, and signature.
 
-### Modelo de permissões
+### Permission model
 
-| Token (claim `provider_id`) | Acesso |
+| Token (`provider_id` claim) | Access |
 |---|---|
-| `provider-a` | Apenas transações onde `provider_id = 'provider-a'` |
-| `provider-b` | Apenas transações onde `provider_id = 'provider-b'` |
-| `wagering-internal` | Operações de carteira (`POST /wallets`, `GET /wallets/*`, `POST /wallets/*/reconciliation`) |
+| `provider-a` | Only transactions where `provider_id = 'provider-a'` |
+| `provider-b` | Only transactions where `provider_id = 'provider-b'` |
+| `wagering-internal` | Wallet operations (`POST /wallets`, `GET /wallets/*`, `POST /wallets/*/reconciliation`) |
 
-### Middleware `AuthMiddleware`
+### `AuthMiddleware`
 
-1. Extrai `Authorization: Bearer <token>`.
-2. Valida JWT contra JWKS.
-3. Extrai `provider_id` do claim configurado (`provider_id` ou `azp`).
-4. Injeta no `context.Context` para handlers.
-5. Handlers de wagering filtram consultas por `provider_id` do token.
-6. Handlers de wallet exigem token interno (`wagering-internal`).
+1. Extracts `Authorization: Bearer <token>`.
+2. Validates the JWT against JWKS.
+3. Extracts `provider_id` from the configured claim (`provider_id` or `azp`).
+4. Injects it into the `context.Context` for handlers.
+5. Wagering handlers filter queries by the token's `provider_id`.
+6. Wallet handlers require an internal token (`wagering-internal`).
 
-### Isolamento
+### Isolation
 
-- `GET /wagering/transactions/:id` → filtra por `provider_id` do token.
-- `GET /providers/:providerId/wagering/transactions/:extId` → valida que `:providerId` = token.
-- Replay respeita isolamento: mesma chave + outro provider → 403/404.
+- `GET /wagering/transactions/:id` → filters by the token's `provider_id`.
+- `GET /providers/:providerId/wagering/transactions/:extId` → validates that `:providerId` matches the token.
+- Replay respects isolation: same key + another provider → 403/404.
 
 ---
 
-## 9. Composição com Uber Fx
+## 9. Composition with Uber Fx
 
-### Módulos
+### Modules
 
-| Módulo | Fornece |
+| Module | Provides |
 |---|---|
 | `config.Module` | `*config.Config` (lazy `Get()`, eager `MustLoad()`) |
 | `database.Module` | `*pgxpool.Pool`, migrations runner |
@@ -216,68 +216,68 @@ Envelope: `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` 
 
 ### Lifecycle
 
-- `fx.Lifecycle` gerencia:
-  - **Start**: Valida config, abre pool DB, cria filas SQS, inicia HTTP server, inicia workers (consumer, reference resolver, outbox publisher).
-  - **Stop**: Para aceitar novas requisições/consumo, aguarda trabalho em andamento (timeout 30s), fecha pool DB, fecha conexões SQS.
-- `fx.NopLogger` em produção; `zap`/`slog` em desenvolvimento.
+- `fx.Lifecycle` manages:
+  - **Start**: Validates config, opens the DB pool, creates SQS queues, starts the HTTP server, starts workers (consumer, reference resolver, outbox publisher).
+  - **Stop**: Stops accepting new requests/consumption, waits for in-flight work (30s timeout), closes the DB pool, closes SQS connections.
+- `fx.NopLogger` in production; `zap`/`slog` in development.
 
 ---
 
-## 10. Shutdown Gracioso
+## 10. Graceful Shutdown
 
 ### HTTP Server
 
-- `http.Server.Shutdown(ctx)` com deadline (`SHUTDOWN_TIMEOUT=30s`).
-- Para de aceitar novas conexões; aguarda requests em voo.
+- `http.Server.Shutdown(ctx)` with a deadline (`SHUTDOWN_TIMEOUT=30s`).
+- Stops accepting new connections; waits for in-flight requests.
 
 ### SQS Consumer
 
-- Para `ReceiveMessage` loop.
-- Aguarda mensagens em processamento terminarem (ou timeout).
-- Se timeout → não deleta da fila → `visibility timeout` expira → reentrega segura.
+- Stops the `ReceiveMessage` loop.
+- Waits for messages being processed to finish (or times out).
+- On timeout → does not delete from the queue → `visibility timeout` expires → safe redelivery.
 
 ### Outbox Publisher
 
-- Para de buscar novos registros.
-- Conclui publicação do registro atual (ou libera lock).
+- Stops fetching new records.
+- Finishes publishing the current record (or releases the lock).
 
-### Workers de Referência
+### Reference Workers
 
-- Para polling.
-- Conclui tentativa atual.
+- Stops polling.
+- Finishes the current attempt.
 
-### Ordem de fechamento (Fx)
+### Shutdown order (Fx)
 
-1. HTTP Server (para entrada nova)
-2. SQS Consumer (para entrada nova)
-3. Workers (concluem trabalho)
-4. Outbox Publisher (conclui publicação)
-5. Database Pool (após todos que usam)
+1. HTTP Server (stops new input)
+2. SQS Consumer (stops new input)
+3. Workers (finish work)
+4. Outbox Publisher (finishes publishing)
+5. Database Pool (after everyone that uses it)
 
 ---
 
 ## 11. Health Checks
 
-| Endpoint | Verifica | Código |
+| Endpoint | Verifies | Code |
 |---|---|---|
-| `GET /health/live` | Processo vivo | 200 sempre |
-| `GET /health/ready` | DB conectado + SQS acessível | 200 se ambos OK, 503 se algum DOWN |
+| `GET /health/live` | Process is alive | 200 always |
+| `GET /health/ready` | DB connected + SQS reachable | 200 if both OK, 503 if either is DOWN |
 
-Usados por Docker Compose (`healthcheck`) e orquestradores.
+Used by Docker Compose (`healthcheck`) and orchestrators.
 
 ---
 
-## 12. Observabilidade
+## 12. Observability
 
 ### Logs
 
-- `slog` JSON com campos: `level`, `msg`, `time`, `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`.
-- **Não** loga credenciais, tokens, payloads financeiros completos.
-- Request ID propagado via header `X-Request-ID` ou gerado.
+- `slog` JSON with fields: `level`, `msg`, `time`, `correlationId`, `messageId`, `transactionId`, `walletId`, `providerId`.
+- **Does not** log credentials, tokens, or complete financial payloads.
+- Request ID propagated via the `X-Request-ID` header or generated.
 
-### Métricas (Prometheus)
+### Metrics (Prometheus)
 
-| Métrica | Tipo | Labels |
+| Metric | Type | Labels |
 |---|---|---|
 | `wager_transactions_total` | Counter | `kind`, `state`, `provider_id` |
 | `wager_idempotency_replays_total` | Counter | `provider_id` |
@@ -291,26 +291,26 @@ Usados por Docker Compose (`healthcheck`) e orquestradores.
 
 ---
 
-## 13. Limitações e Interpretações
+## 13. Limitations and Interpretations
 
-| Item | Decisão |
+| Item | Decision |
 |---|---|
-| Moedas | Suporte completo a ISO 4217 no domínio; testes cobrem incompatibilidade. Cenários principais em BRL. |
-| `OPENING` por transporte | Rejeitado no handler (HTTP/SQS). Banco não distingue canal — limitação documentada em `docs/schema.md`. |
-| `REFUND` + `ROLLBACK` mesma referência | Índice impede mesmo tipo. Tipos diferentes convivem (decisão de produto). |
-| `failure_code` em `PENDING_REFERENCE` | Permitido `NULL` para não forçar worker a preencher antes da hora. |
-| Partidas dobradas | Não implementado (opcional). Ledger é single-entry com direção. |
-| Tracing OpenTelemetry | Não implementado (opcional). Logs com `correlationId` permitem rastreamento. |
-| Carga | Sem meta de RPS. Testes de concorrência validam correção, não throughput. |
+| Currencies | Full ISO 4217 support in the domain; tests cover mismatch. Main scenarios in BRL. |
+| `OPENING` per transport | Rejected in the handler (HTTP/SQS). The database does not distinguish the channel — limitation documented in `docs/schema.md`. |
+| `REFUND` + `ROLLBACK` same reference | The index prevents the same type. Different types coexist (product decision). |
+| `failure_code` in `PENDING_REFERENCE` | `NULL` allowed so the worker is not forced to fill it in ahead of time. |
+| Double-entry bookkeeping | Not implemented (optional). The ledger is single-entry with a direction. |
+| OpenTelemetry tracing | Not implemented (optional). Logs with `correlationId` allow tracing. |
+| Load | No RPS target. Concurrency tests validate correctness, not throughput. |
 
 ---
 
-## 14. Trabalho Não Concluído / Melhorias Futuras
+## 14. Unfinished Work / Future Improvements
 
-- [ ] Partidas dobradas (double-entry ledger) para auditoria contábil completa.
-- [ ] OpenTelemetry tracing integrado.
-- [ ] Rate limiting por provider no API Gateway / middleware.
-- [ ] Dashboard Grafana pré-configurado.
-- [ ] Testes de carga automatizados (k6/Gatling) com comando reproduzível.
-- [ ] Rotação de chaves JWKS automática (cache com TTL).
-- [ ] Métricas de latência por percentil (p50/p95/p99) no health/ready.
+- [ ] Double-entry ledger for complete accounting audit.
+- [ ] Integrated OpenTelemetry tracing.
+- [ ] Per-provider rate limiting in the API Gateway / middleware.
+- [ ] Pre-configured Grafana dashboard.
+- [ ] Automated load tests (k6/Gatling) with a reproducible command.
+- [ ] Automatic JWKS key rotation (cache with TTL).
+- [ ] Latency metrics by percentile (p50/p95/p99) in health/ready.

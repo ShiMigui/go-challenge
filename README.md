@@ -1,162 +1,162 @@
-# go-challenge — Processamento Distribuído de Apostas
+# go-challenge — Distributed Wagering Processing
 
-Serviço em Go para processamento financeiro de operações de provedores de jogos (BET, WIN, LOSS, REFUND, ROLLBACK) com garantias de integridade financeira, idempotência persistente, concorrência e recuperação de falhas.
-
----
-
-## Pré-requisitos
-
-- **Go 1.23+** (versão declarada em `go.mod` e `Dockerfile`)
-- **Docker & Docker Compose** (para PostgreSQL, LocalStack/SQS, Keycloak)
-- **Make** (opcional, para comandos de conveniência)
+Go service for financial processing of game provider operations (BET, WIN, LOSS, REFUND, ROLLBACK) with financial integrity guarantees, persistent idempotency, concurrency, and failure recovery.
 
 ---
 
-## Variáveis de Ambiente
+## Prerequisites
 
-Copie `.env.example` para `.env` e ajuste se necessário:
+- **Go 1.27.1+** (version declared in `go.mod`, `Dockerfile`, and `docker-compose.yml`)
+- **Docker & Docker Compose** (for PostgreSQL, LocalStack/SQS, Keycloak)
+- **Make** (optional, for convenience commands)
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and adjust if necessary:
 
 ```bash
 cp .env.example .env
 ```
 
-| Variável | Descrição | Padrão |
+| Variable | Description | Default |
 |---|---|---|
-| `APP_ENV` | `production` ou `development`. Em production, erros internos são ocultados. | `production` |
-| `API_PORT` | Porta do servidor HTTP | `8080` |
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Conexão PostgreSQL | `postgres:5432/wagering` |
-| `CLOUD_ENDPOINT_URL_SQS` | Endpoint LocalStack SQS | `http://localstack:4566` |
-| `SQS_QUEUE_NAME` | Fila FIFO principal | `wager-transactions.fifo` |
+| `APP_ENV` | `production` or `development`. In production, internal errors are hidden. | `production` |
+| `API_PORT` | HTTP server port | `8080` |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | PostgreSQL connection | `postgres:5432/wagering` |
+| `CLOUD_ENDPOINT_URL_SQS` | LocalStack SQS endpoint | `http://localstack:4566` |
+| `SQS_QUEUE_NAME` | Main FIFO queue | `wager-transactions.fifo` |
 | `SQS_QUEUE_DLQ_NAME` | Dead-letter queue | `wager-transactions-dlq.fifo` |
 | `OIDC_ISSUER_URL` | Keycloak realm URL | `http://keycloak:8080/realms/wagering` |
-| `OIDC_AUDIENCE` | Audience esperado no JWT | `wagering-api` |
+| `OIDC_AUDIENCE` | Expected audience in the JWT | `wagering-api` |
 
-Valores completos em `.env.example`.
+Full values in `.env.example`.
 
 ---
 
-## Inicialização Rápida
+## Quick Start
 
 ```bash
-# 1. Subir toda a stack (PostgreSQL, LocalStack, Keycloak, API, migrations)
+# 1. Bring up the whole stack (PostgreSQL, LocalStack, Keycloak, API, migrations)
 docker compose up --build -d
 
-# 2. Aguardar health checks (≈30s na primeira vez)
-docker compose logs -f migrate  # migrations aplicadas automaticamente
-docker compose logs -f api      # API pronta em :8080
+# 2. Wait for health checks (≈30s the first time)
+docker compose logs -f migrate  # migrations applied automatically
+docker compose logs -f api      # API ready on :8080
 
-# 3. Verificar se tudo subiu
+# 3. Verify everything is up
 curl http://localhost:8080/health/live   # {"status":"UP"}
 curl http://localhost:8080/health/ready  # {"status":"UP","checks":{"database":"UP","messaging":"UP"}}
 ```
 
-> **Nota**: O serviço `migrate` roda as migrations (`.up.sql` em `scripts/postgres/migrations/`) antes da API iniciar. `depends_on` com `condition: service_completed_successfully` garante a ordem.
+> **Note**: The `migrate` service runs the migrations (`.up.sql` in `scripts/postgres/migrations/`) before the API starts. `depends_on` with `condition: service_completed_successfully` guarantees the order.
 
 ---
 
-## Estrutura do Projeto
+## Project Structure
 
 ```
 .
 ├── cmd/api/                    # Entry point (main.go + Fx bootstrap)
 ├── internal/
-│   ├── application/            # Casos de uso (wallet, wagering, events)
-│   ├── bootstrap/              # Fx modules wiring
-│   ├── config/                 # Configuração (lazy Get(), eager MustLoad())
-│   ├── domain/                 # Entidades, value objects, erros de domínio
-│   │   ├── money/              # Money (int64, parsing, aritmética)
+│   ├── application/            # Use cases (wallet, wagering, events)
+│   ├── bootstrap/              # Fx module wiring
+│   ├── config/                 # Configuration (lazy Get(), eager MustLoad())
+│   ├── domain/                 # Entities, value objects, domain errors
+│   │   ├── money/              # Money (int64, parsing, arithmetic)
 │   │   ├── wallet/             # Wallet aggregate
 │   │   ├── wager/              # WagerTransaction, state machine
 │   │   ├── ledger/             # WalletLedgerEntry
-│   │   ├── identifier/         # Validação de UUIDs
-│   │   └── event/              # Eventos de domínio
+│   │   ├── identifier/         # UUID validation
+│   │   └── event/              # Domain events
 │   ├── infrastructure/
-│   │   ├── persistence/        # Repositórios pgx + SQL explícito
+│   │   ├── persistence/        # pgx repositories + explicit SQL
 │   │   ├── sqs/                # Consumer, publisher, inbox/outbox workers
 │   │   └── health/             # Health checks (DB + SQS)
-│   └── interfaces/http/        # Handlers, DTOs, middleware, rotas
+│   └── interfaces/http/        # Handlers, DTOs, middleware, routes
 ├── scripts/
 │   └── postgres/
-│       ├── migrate.sh          # Runner de migrations
-│       └── migrations/         # Fonte única: .up.sql + .down.sql
+│       ├── migrate.sh          # Migration runner
+│       └── migrations/         # Single source: .up.sql + .down.sql
 ├── test/
-│   └── api_test.sh             # Suite de testes de API (≈100 casos)
+│   └── api_test.sh             # API test suite (≈100 cases)
 ├── docker-compose.yml
 ├── Dockerfile
 ├── go.mod / go.sum
-├── ARCHITECTURE.md             # Decisões técnicas detalhadas
-├── CHALLENGE.md                # Enunciado original
-└── README.md                   # Este arquivo
+├── ARCHITECTURE.md             # Detailed technical decisions
+├── CHALLENGE.md                # Original challenge statement
+└── README.md                   # This file
 ```
 
 ---
 
 ## Migrations
 
-**Fonte única**: `scripts/postgres/migrations/` (6 pares `.up.sql` + `.down.sql`).
+**Single source**: `scripts/postgres/migrations/` (6 `.up.sql` + `.down.sql` pairs).
 
-### Aplicar (automático no `docker compose up`)
+### Apply (automatic on `docker compose up`)
 
 ```bash
-# Via script standalone (útil em CI/CD)
+# Via standalone script (useful in CI/CD)
 ./scripts/postgres/migrate.sh up
 
-# Ou via Docker (já configurado no compose)
+# Or via Docker (already configured in the compose file)
 docker compose run --rm migrate
 ```
 
-### Reverter
+### Revert
 
 ```bash
-./scripts/postgres/migrate.sh down  # reverte a última
-./scripts/postgres/migrate.sh down 3  # reverte 3
-./scripts/postgres/migrate.sh down all  # reverte todas
+./scripts/postgres/migrate.sh down  # reverts the last one
+./scripts/postgres/migrate.sh down 3  # reverts 3
+./scripts/postgres/migrate.sh down all  # reverts all
 ```
 
-### Criar nova migration
+### Create a new migration
 
 ```bash
-# Cria par de arquivos com timestamp
-./scripts/postgres/migrate.sh create "nome_da_migration"
+# Creates a pair of files with a timestamp
+./scripts/postgres/migrate.sh create "migration_name"
 ```
 
 ---
 
-## Executando a Aplicação
+## Running the Application
 
-### Via Docker Compose (recomendado)
+### Via Docker Compose (recommended)
 
 ```bash
 docker compose up --build -d
 ```
 
-### Local (sem containers, requer PostgreSQL/SQS/Keycloak rodando)
+### Local (without containers, requires PostgreSQL/SQS/Keycloak running)
 
 ```bash
-# Configurar .env com endpoints locais
+# Configure .env with local endpoints
 go run ./cmd/api
 ```
 
 ---
 
-## Testes
+## Tests
 
-### Unitários + Integração (PostgreSQL real via testcontainers ou container local)
+### Unit + Integration (real PostgreSQL via testcontainers or a local container)
 
 ```bash
 go test ./...
-go test -race ./...     # Sem data races
-go vet ./...            # Sem warnings
+go test -race ./...     # No data races
+go vet ./...            # No warnings
 ```
 
-### Testes de API (HTTP real contra stack completa)
+### API tests (real HTTP against the full stack)
 
 ```bash
-# Stack deve estar rodando (docker compose up -d)
+# The stack must be running (docker compose up -d)
 ./test/api_test.sh
 ```
 
-Saída esperada (exemplo):
+Expected output (example):
 ```
 ========================================
   WAGERING API TEST SUITE
@@ -179,15 +179,15 @@ Passed: 100+
 Failed: 0
 ```
 
-O script testa: health, wallets (criação, duplicata, moeda inválida, playerId ausente), ledger paginado, reconciliação, BET/WIN/LOSS/REFUND/ROLLBACK, idempotência (replay, conflito), referências (antes/depois, não encontrada), concorrência (duas BETs 80.00 em 100.00), isolamento entre providers, valores inválidos (zero, negativo, moeda errada, kind inválido, referência faltando), e mais.
+The script tests: health, wallets (creation, duplicate, invalid currency, missing playerId), paginated ledger, reconciliation, BET/WIN/LOSS/REFUND/ROLLBACK, idempotency (replay, conflict), references (before/after, not found), concurrency (two 80.00 BETs against 100.00), isolation between providers, invalid values (zero, negative, wrong currency, invalid kind, missing reference), and more.
 
 ---
 
-## Exemplos de Chamadas HTTP
+## HTTP Call Examples
 
-### Autenticação
+### Authentication
 
-Tokens JWT via Keycloak (`client_credentials`). Exemplos com `curl` assumem token já obtido:
+JWT tokens via Keycloak (`client_credentials`). The `curl` examples assume a token has already been obtained:
 
 ```bash
 # Provider A
@@ -198,11 +198,11 @@ TOKEN_A=$(curl -s -X POST http://localhost:8080/realms/wagering/protocol/openid-
 # Provider B
 TOKEN_B=$(...)
 
-# Internal (operações de carteira)
+# Internal (wallet operations)
 TOKEN_INT=$(...)
 ```
 
-### Criar Carteira (apenas token interno)
+### Create Wallet (internal token only)
 
 ```bash
 curl -X POST http://localhost:8080/wallets \
@@ -212,7 +212,7 @@ curl -X POST http://localhost:8080/wallets \
 # 201: {"id":"...","playerId":"...","balance":{"amount":"100.00","currency":"BRL"},"version":1}
 ```
 
-### Consultar Carteira
+### Query Wallet
 
 ```bash
 curl http://localhost:8080/wallets/<WALLET_ID> \
@@ -220,7 +220,7 @@ curl http://localhost:8080/wallets/<WALLET_ID> \
 # 200: {"id":"...","playerId":"...","balance":{"amount":"100.00","currency":"BRL"},"version":1}
 ```
 
-### Ledger Paginado
+### Paginated Ledger
 
 ```bash
 curl "http://localhost:8080/wallets/<WALLET_ID>/ledger?limit=10" \
@@ -228,7 +228,7 @@ curl "http://localhost:8080/wallets/<WALLET_ID>/ledger?limit=10" \
 # 200: {"entries":[...],"nextCursor":"...","limit":10}
 ```
 
-### Reconciliação
+### Reconciliation
 
 ```bash
 curl -X POST http://localhost:8080/wallets/<WALLET_ID>/reconciliation \
@@ -236,7 +236,7 @@ curl -X POST http://localhost:8080/wallets/<WALLET_ID>/reconciliation \
 # 200: {"walletId":"...","storedBalance":{"amount":"...","currency":"BRL"},"calculatedBalance":{...},"difference":{"amount":"0.00","currency":"BRL"},"consistent":true,"checkedEntries":N}
 ```
 
-### Enviar Transação (Provider A)
+### Submit Transaction (Provider A)
 
 ```bash
 curl -X POST http://localhost:8080/wagering/transactions \
@@ -256,19 +256,19 @@ curl -X POST http://localhost:8080/wagering/transactions \
 # 200: {"transactionId":"...","status":"PROCESSED","balance":{"amount":"75.00","currency":"BRL"},"idempotentReplay":false}
 ```
 
-### Replay Idempotente (mesma chave)
+### Idempotent Replay (same key)
 
 ```bash
-# Mesmo comando acima → 200 com idempotentReplay: true e balance = saldo OBSERVADO no processamento original
+# Same command as above → 200 with idempotentReplay: true and balance = balance OBSERVED during the original processing
 ```
 
-### Conflito de Idempotência (mesma chave, payload diferente)
+### Idempotency Conflict (same key, different payload)
 
 ```bash
-# Mesmo Idempotency-Key, externalTransactionId diferente → 409 IDEMPOTENCY_CONFLICT
+# Same Idempotency-Key, different externalTransactionId → 409 IDEMPOTENCY_CONFLICT
 ```
 
-### WIN (crédito)
+### WIN (credit)
 
 ```bash
 curl -X POST http://localhost:8080/wagering/transactions \
@@ -277,56 +277,56 @@ curl -X POST http://localhost:8080/wagering/transactions \
   -d '{"providerId":"provider-a","externalTransactionId":"tx-win-1","playerId":"...","walletId":"<WALLET_ID>","roundId":"round-1","gameId":"game-1","kind":"WIN","money":{"amount":"50.00","currency":"BRL"}}'
 ```
 
-### LOSS (sem movimentação, amount=0)
+### LOSS (no movement, amount=0)
 
 ```bash
 curl -X POST ... -H "Idempotency-Key: provider-a:tx-loss-1" \
   -d '{"...","kind":"LOSS","money":{"amount":"0.00","currency":"BRL"}}'
-# 200: status PROCESSED, balance inalterado, sem ledger
+# 200: status PROCESSED, balance unchanged, no ledger entry
 ```
 
-### REFUND (crédito, requer referência)
+### REFUND (credit, requires a reference)
 
 ```bash
 curl -X POST ... -H "Idempotency-Key: provider-a:tx-refund-1" \
   -d '{"...","kind":"REFUND","money":{"amount":"25.00","currency":"BRL"},"referenceExternalTransactionId":"tx-001"}'
-# Devolve valor da BET referenciada (tx-001)
+# Returns the amount of the referenced BET (tx-001)
 ```
 
-### ROLLBACK (débito contrário, requer referência)
+### ROLLBACK (opposite debit, requires a reference)
 
 ```bash
 curl -X POST ... -H "Idempotency-Key: provider-a:tx-rb-1" \
   -d '{"...","kind":"ROLLBACK","money":{"amount":"50.00","currency":"BRL"},"referenceExternalTransactionId":"tx-win-1"}'
-# Desfaz WIN referenciado
+# Undoes the referenced WIN
 ```
 
-### Consultar Transação por ID Interno
+### Query Transaction by Internal ID
 
 ```bash
 curl http://localhost:8080/wagering/transactions/<TX_ID> \
   -H "Authorization: Bearer $TOKEN_A"
 ```
 
-### Consultar Transação por ID Externo (provider-scoped)
+### Query Transaction by External ID (provider-scoped)
 
 ```bash
 curl http://localhost:8080/providers/provider-a/wagering/transactions/tx-001 \
   -H "Authorization: Bearer $TOKEN_A"
-# Provider B tentando acessar → 403/404
+# Provider B attempting to access → 403/404
 ```
 
 ---
 
-## Fluxos Autenticados (Keycloak)
+## Authenticated Flows (Keycloak)
 
-O Docker Compose provisiona o Keycloak automaticamente:
+Docker Compose provisions Keycloak automatically:
 
 - Realm: `wagering`
 - Clients: `wagering-api` (confidential), `provider-a`, `provider-b`, `wagering-internal`
-- Usuários de teste: `admin`/`admin` (admin console)
+- Test users: `admin`/`admin` (admin console)
 
-### Obter token (provider-a)
+### Obtain token (provider-a)
 
 ```bash
 curl -X POST http://localhost:8080/realms/wagering/protocol/openid-connect/token \
@@ -334,21 +334,21 @@ curl -X POST http://localhost:8080/realms/wagering/protocol/openid-connect/token
   -d "grant_type=client_credentials&client_id=provider-a&client_secret=provider-a-secret"
 ```
 
-### Isolamento entre providers
+### Isolation between providers
 
-- Token `provider-a` só vê/cria transações com `providerId=provider-a`.
-- `GET /providers/provider-b/...` com token `provider-a` → 403.
-- Replay com token errado → 403/404.
+- The `provider-a` token can only see/create transactions with `providerId=provider-a`.
+- `GET /providers/provider-b/...` with a `provider-a` token → 403.
+- Replay with the wrong token → 403/404.
 
 ---
 
-## Comandos de Verificação Obrigatórios
+## Required Verification Commands
 
 ```bash
-# Formatação
-gofmt -l .  # deve retornar vazio
+# Formatting
+gofmt -l .  # must return empty
 
-# Testes
+# Tests
 go test ./...
 go test -race ./...
 go vet ./...
@@ -359,33 +359,33 @@ docker compose build
 
 ---
 
-## Arquitetura Resumida
+## Architecture Summary
 
-Veja **`ARCHITECTURE.md`** para decisões detalhadas sobre:
+See **`ARCHITECTURE.md`** for detailed decisions on:
 
-- Dinheiro (`int64` unidades mínimas, sem float)
-- Transações SQL (uma por operação, RepeatableRead + CAS)
-- Idempotência (duas uniques + hash canônico cross-transporte)
-- Concorrência (versão + compare-and-set, sem lock global)
-- Referências pendentes (worker com backoff exponencial)
-- Reversões (índice único parcial impede duplicata por tipo)
-- Inbox/Outbox (mesma transação, workers separados, dispute por lock)
-- Autenticação (Keycloak, JWT, isolamento por provider_id)
-- Fx composition (modules, lifecycle, shutdown gracioso)
-- Observabilidade (logs JSON estruturados, métricas Prometheus)
-
----
-
-## Limitações Conhecidas
-
-- `OPENING` rejeitado no handler (HTTP/SQS); banco não distingue canal.
-- `REFUND` + `ROLLBACK` sobre mesma referência: mesmo tipo bloqueado, tipos diferentes permitidos.
-- Partidas dobradas não implementadas (opcional).
-- OpenTelemetry tracing não implementado (opcional).
-- Rate limiting não implementado.
+- Money (`int64` minor units, no float)
+- SQL transactions (one per operation, RepeatableRead + CAS)
+- Idempotency (two uniques + canonical cross-transport hash)
+- Concurrency (version + compare-and-set, no global lock)
+- Pending references (worker with exponential backoff)
+- Reversals (partial unique index prevents duplicates per type)
+- Inbox/Outbox (same transaction, separate workers, lock-based dispute)
+- Authentication (Keycloak, JWT, isolation by provider_id)
+- Fx composition (modules, lifecycle, graceful shutdown)
+- Observability (structured JSON logs, Prometheus metrics)
 
 ---
 
-## Licença
+## Known Limitations
 
-Código de desafio técnico. Uso livre para fins de avaliação.
+- `OPENING` rejected in the handler (HTTP/SQS); the database does not distinguish the channel.
+- `REFUND` + `ROLLBACK` on the same reference: same type blocked, different types allowed.
+- Double-entry bookkeeping not implemented (optional).
+- OpenTelemetry tracing not implemented (optional).
+- Rate limiting not implemented.
+
+---
+
+## License
+
+Technical challenge code. Free to use for evaluation purposes.
