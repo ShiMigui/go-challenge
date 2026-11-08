@@ -388,4 +388,4 @@ See **`ARCHITECTURE.md`** for detailed decisions on:
 
 ## License
 
-Technical challenge code. Free to use for evaluation purposes.
+Released under the [MIT License](./LICENSE).
