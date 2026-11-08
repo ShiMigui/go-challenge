@@ -1,5 +1,7 @@
 # go-challenge — Distributed Wagering Processing
 
+[![CI](https://github.com/ShiMigui/go-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/ShiMigui/go-challenge/actions/workflows/ci.yml)
+
 Go service for financial processing of game provider operations (BET, WIN, LOSS, REFUND, ROLLBACK) with financial integrity guarantees, persistent idempotency, concurrency, and failure recovery.
 
 ---
